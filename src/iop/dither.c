@@ -18,7 +18,7 @@
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
-#include <xmmintrin.h>
+
 #include <stdlib.h>
 #include <math.h>
 #include <assert.h>
@@ -29,6 +29,7 @@
 #include "control/control.h"
 #include "common/opencl.h"
 #include "common/imageio.h"
+#include "common/vector.h"
 #include "bauhaus/bauhaus.h"
 #include "gui/accelerators.h"
 #include "gui/gtk.h"
@@ -36,14 +37,14 @@
 #include "dtgtk/gradientslider.h"
 #include <gtk/gtk.h>
 #include <inttypes.h>
-#include <xmmintrin.h>
+
 
 #define CLIP(x) ((x<0)?0.0:(x>1.0)?1.0:x)
 #define TEA_ROUNDS 8
 
 DT_MODULE(1)
 
-typedef __m128 (_find_nearest_color)(float *val, const float f, const float rf);
+typedef v4sf (_find_nearest_color)(float *val, const float f, const float rf);
 
 typedef enum dt_iop_dither_type_t
 {
@@ -129,44 +130,44 @@ void init_presets (dt_iop_module_so_t *self)
 
 
 // dither pixel into gray, with f=levels-1 and rf=1/f, return err=old-new
-static __m128
+static v4sf
 _find_nearest_color_n_levels_gray(float *val, const float f, const float rf)
 {
-  __m128 err;
-  __m128 new;
+  v4sf err;
+  v4sf new;
 
   const float in = 0.30f*val[0] + 0.59f*val[1] + 0.11f*val[2];                                // RGB -> GRAY
 
   float tmp = in * f;
   int itmp  = floorf(tmp);
 
-  new = _mm_set1_ps(tmp - itmp > 0.5f ? (float)(itmp + 1) * rf : (float)itmp * rf);
-  err = _mm_sub_ps(_mm_load_ps(val), new);
-  _mm_store_ps(val, new);
+  new = v4sf_setall(tmp - itmp > 0.5f ? (float)(itmp + 1) * rf : (float)itmp * rf);
+  err = *(v4sf*)val - new;
+  *(v4sf*)val = new;
 
   return err;
 }
 
 // dither pixel into RGB, with f=levels-1 and rf=1/f, return err=old-new
-static __m128
+static v4sf
 _find_nearest_color_n_levels_rgb(float *val, const float f, const float rf)
 {
-  __m128 old  = _mm_load_ps(val);
-  __m128 tmp  = _mm_mul_ps(old, _mm_set1_ps(f));                                               // old * f
-  __m128 itmp = _mm_cvtepi32_ps(_mm_cvtps_epi32(tmp));                                         // floor(tmp)
-  __m128 new  = _mm_mul_ps(_mm_add_ps(itmp, _mm_and_ps(_mm_cmpgt_ps(_mm_sub_ps(tmp, itmp),     // (tmp - itmp > 0.5f ? itmp + 1 : itmp) * rf
-                                      _mm_set1_ps(0.5f)), _mm_set1_ps(1.0f))), _mm_set1_ps(rf));
+  v4sf old  = *(v4sf*)val;
+  v4sf tmp  = old*f;
+  /* FIXME: There are smarter ways to floor (see code) */
+  v4sf itmp = v4sf_set(floor(tmp[3]), floor(tmp[2]), floor(tmp[1]), floor(tmp[0]));
+  v4sf new = rf * (itmp + v4si_to_v4sf(-((tmp-itmp)>0.5f))); // (tmp - itmp > 0.5f ? itmp + 1 : itmp) * rf
 
-  _mm_store_ps(val, new);
+  *(v4sf*)val = new;
 
-  return _mm_sub_ps(old, new);
+  return old-new;
 }
 
 
 static inline void
-_diffuse_error(float *val, const __m128 err, const float factor)
+_diffuse_error(float *val, const v4sf err, const float factor)
 {
-  _mm_store_ps(val, _mm_add_ps(_mm_load_ps(val), _mm_mul_ps(err, _mm_set1_ps(factor))));       // *val += err * factor
+  *(v4sf*)val += err*factor;       // *val += err * factor
 }
 
 static inline float
@@ -270,7 +271,7 @@ void process_floyd_steinberg (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop
 
   const float f = levels - 1;
   const float rf = 1.0/f;
-  __m128 err;
+  v4sf err;
 
   // dither without error diffusion on very tiny images
   if(width < 3 || height < 3)
