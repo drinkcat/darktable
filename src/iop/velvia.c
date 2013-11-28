@@ -29,12 +29,12 @@
 #include "develop/develop.h"
 #include "develop/imageop.h"
 #include "common/opencl.h"
+#include "common/vector.h"
 #include "control/control.h"
 #include "gui/accelerators.h"
 #include "gui/gtk.h"
 #include <gtk/gtk.h>
 #include <inttypes.h>
-#include <xmmintrin.h>
 
 // NaN-safe clip: NaN compares false and will result in 0.0
 #define CLIP(x)                 (((x)>=0.0)?((x)<=1.0?(x):1.0):0.0)
@@ -157,14 +157,14 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
       float saturation = strength*pweight;			// So lets calculate the final affection of filter on pixel
 
       // Apply velvia saturation values
-      const __m128 inp_m  = _mm_load_ps(inp);
-      const __m128 boost  = _mm_set1_ps(saturation);
-      const __m128 min_m  = _mm_set1_ps(0.0f);
-      const __m128 max_m  = _mm_set1_ps(1.0f);
+      const v4sf inp_m  = *(v4sf*)inp;
+      const v4sf boost  = v4sf_setall(saturation);
+      const v4sf min_m  = v4sf_setall(0.0f);
+      const v4sf max_m  = v4sf_setall(1.0f);
 
-      const __m128 inp_shuffled = _mm_mul_ps(_mm_add_ps(_mm_shuffle_ps(inp_m,inp_m,_MM_SHUFFLE(3,0,2,1)),_mm_shuffle_ps(inp_m,inp_m,_MM_SHUFFLE(3,1,0,2))),_mm_set1_ps(0.5f));
+      const v4sf inp_shuffled = 0.5f*(__builtin_shuffle(inp_m,v4si_set(3,0,2,1))+__builtin_shuffle(inp_m,v4si_set(3,1,0,2)));
 
-      _mm_stream_ps( outp, _mm_min_ps(max_m,_mm_max_ps(min_m, _mm_add_ps(inp_m, _mm_mul_ps(boost,_mm_sub_ps(inp_m,inp_shuffled))))));
+      *(v4sf*)outp = v4sf_min(max_m,v4sf_max(min_m, inp_m + boost*(inp_m-inp_shuffled)));
 
       // equivalent to:
       /*
@@ -174,7 +174,7 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
       */
     }
   }
-  _mm_sfence();
+  vector_sfence();
 
   if(piece->pipe->mask_display)
     dt_iop_alpha_copy(ivoid, ovoid, roi_out->width, roi_out->height);
