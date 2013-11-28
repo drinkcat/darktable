@@ -26,12 +26,13 @@
 #include "develop/imageop.h"
 #include "control/control.h"
 #include "common/opencl.h"
+#include "common/vector.h"
 #include "gui/accelerators.h"
 #include "gui/gtk.h"
 #include <gtk/gtk.h>
 #include <stdlib.h>
 #include <assert.h>
-#include <xmmintrin.h>
+
 
 DT_MODULE(1)
 
@@ -145,20 +146,21 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
     float *in  = ((float *)i) + ch*roi_in->width *j;
     float *out = ((float *)o) + ch*roi_out->width*j;
 
-    const __m128 scale = _mm_set_ps(0.0f,d->b_steepness,d->a_steepness,1.0f);
-    const __m128 offset = _mm_set_ps(0.0f,d->b_offset,d->a_offset,0.0f);
-    const __m128 min = _mm_set_ps(0.0f,-128.0f,-128.0f, -INFINITY);
-    const __m128 max = _mm_set_ps(0.0f, 128.0f, 128.0f,  INFINITY);
+    const v4sf scale = v4sf_set(0.0f,d->b_steepness,d->a_steepness,1.0f);
+    const v4sf offset = v4sf_set(0.0f,d->b_offset,d->a_offset,0.0f);
+    const v4sf min = v4sf_set(0.0f,-128.0f,-128.0f, -INFINITY);
+    const v4sf max = v4sf_set(0.0f, 128.0f, 128.0f,  INFINITY);
 
 
     for(int i=0; i<roi_out->width; i++)
     {
-      _mm_stream_ps(out,_mm_min_ps(max,_mm_max_ps(min,_mm_add_ps(offset,_mm_mul_ps(scale,_mm_load_ps(in))))));
+      *(v4sf*)out = v4sf_min(max,v4sf_max(min,(offset+(scale*(*(v4sf*)in)))));
       in+=ch;
       out+=ch;
     }
   }
-  _mm_sfence();
+
+  vector_sfence();
 
   if(piece->pipe->mask_display)
     dt_iop_alpha_copy(i, o, roi_out->width, roi_out->height);
