@@ -28,7 +28,7 @@
 #include "control/control.h"
 #include <memory.h>
 #include <stdlib.h>
-#include <xmmintrin.h>
+#include "common/vector.h"
 // SSE4 actually not used yet.
 // #include <smmintrin.h>
 
@@ -175,9 +175,12 @@ weight_sse(const __m128 *c1, const __m128 *c2, const float sharpen)
   added = _mm_sub_ss(added, square);              // (?, d2+d3, d2+d3, d1)
   __m128 sharpened = _mm_mul_ps(added, vsharpen); // (?, -s*(d2+d3), -s*(d2+d3), -s*d1)
   __m128 exp = dt_fast_expf_sse(sharpened);       // (?, wc, wc, wl)
+#if 0
   exp = _mm_castsi128_ps(_mm_slli_si128(_mm_castps_si128(exp), 4)); // (wc, wc, wl, 0)
   exp = _mm_castsi128_ps(_mm_srli_si128(_mm_castps_si128(exp), 4)); // (0, wc, wc, wl)
-  exp = _mm_or_ps(exp, ooo1); // (1, wc, wc, wl)
+#endif
+  exp = _mm_andnot_ps(ooo1, exp); // (0, wc, wc, wl)
+  exp = _mm_or_ps(ooo1, exp); // (1, wc, wc, wl)
   return exp;
 }
 
