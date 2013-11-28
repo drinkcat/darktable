@@ -30,7 +30,6 @@
 #include <stdlib.h>
 
 
-
 #define BLOCKSIZE 2048		/* maximum blocksize. must be a power of 2 and will be automatically reduced if needed */
 #define NUM_BUCKETS 4
 
@@ -484,10 +483,10 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
           for(; i<last-4; i+=4, inp+=4, inps+=4, inm+=4, inms+=4, s+=4)
           {
             v4sf sv = *(v4sf*)s;
-            const v4sf inp1 = *inp + *inps;
-            const v4sf inp2 = *(inp+1) + *(inps+1);
-            const v4sf inp3 = *(inp+2) + *(inps+2);
-            const v4sf inp4 = *(inp+3) + *(inps+3);
+            const v4sf inp1 = *inp - *inps;
+            const v4sf inp2 = *(inp+1) - *(inps+1);
+            const v4sf inp3 = *(inp+2) - *(inps+2);
+            const v4sf inp4 = *(inp+3) - *(inps+3);
 
             const v4sf inp12lo = __builtin_shuffle(inp1,inp2,(v4si){0,4,1,5});
             const v4sf inp34lo = __builtin_shuffle(inp3,inp4,(v4si){0,4,1,5});
