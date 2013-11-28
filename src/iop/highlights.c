@@ -22,7 +22,7 @@
 #include <math.h>
 #include <assert.h>
 #include <string.h>
-#include <xmmintrin.h>
+
 #include "develop/develop.h"
 #include "develop/imageop.h"
 #include "control/control.h"
@@ -30,6 +30,7 @@
 #include "gui/gtk.h"
 #include "bauhaus/bauhaus.h"
 #include "common/opencl.h"
+#include "common/vector.h"
 #include <gtk/gtk.h>
 #include <inttypes.h>
 
@@ -168,22 +169,22 @@ void process(
   // const int ch = piece->colors;
   if(dt_dev_pixelpipe_uses_downsampled_input(piece->pipe) || !filters)
   {
-    const __m128 clipm = _mm_set1_ps(clip);
+    const v4sf clipm = v4sf_setall(clip);
 #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic) default(none) shared(ovoid, ivoid, roi_in, roi_out, data, piece)
 #endif
     for(int j=0; j<roi_out->height; j++)
     {
-      float *out = (float *)ovoid + 4*roi_out->width*j;
-      float *in  = (float *)ivoid + 4*roi_in->width*j;
+      v4sf *out = (v4sf *)ovoid + roi_out->width*j;
+      v4sf *in  = (v4sf *)ivoid + roi_in->width*j;
       for(int i=0; i<roi_out->width; i++)
       {
-        _mm_stream_ps(out, _mm_min_ps(clipm, _mm_set_ps(in[3],in[2],in[1],in[0])));
-        in += 4;
-        out += 4;
+        *out = v4sf_min(clipm, *in);
+        in ++;
+        out ++;
       }
     }
-    _mm_sfence();
+    vector_sfence();
     return;
   }
 
@@ -236,7 +237,7 @@ void process(
     default:
     case DT_IOP_HIGHLIGHTS_CLIP:
     {
-      const __m128 clipm = _mm_set1_ps(clip);
+      const v4sf clipm = v4sf_setall(clip);
       const int n = roi_out->height*roi_out->width;
       float *const out = (float *)ovoid;
       float *const in  = (float *)ivoid;
@@ -244,8 +245,8 @@ void process(
       #pragma omp parallel for schedule(static) default(none)
 #endif
       for(int j=0; j<n; j+=4)
-        _mm_stream_ps(out+j, _mm_min_ps(clipm, _mm_load_ps(in+j)));
-      _mm_sfence();
+        *(v4sf*)(out+j) = v4sf_min(clipm, *(v4sf*)(in+j));
+      vector_sfence();
       // lets see if there's a non-multiple of four rest to process:
       if(n & 3) for(int j=n&~3u; j<n; j++) out[j] = MIN(clip, in[j]);
       break;
