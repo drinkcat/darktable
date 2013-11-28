@@ -22,9 +22,10 @@
 #include <math.h>
 #include <assert.h>
 #include <string.h>
-#include <xmmintrin.h>
+
 #include "iop/exposure.h"
 #include "common/opencl.h"
+#include "common/vector.h"
 #include "develop/develop.h"
 #include "control/control.h"
 #include "gui/accelerators.h"
@@ -116,8 +117,8 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
   const float white = exposure2white(d->exposure);
   const int ch = piece->colors;
   const float scale = 1.0/(white - black);
-  const __m128 blackv = _mm_set1_ps(black);
-  const __m128 scalev = _mm_set1_ps(scale);
+  const v4sf blackv = v4sf_setall(black);
+  const v4sf scalev = v4sf_setall(scale);
 #ifdef _OPENMP
   #pragma omp parallel for default(none) shared(roi_out,i,o) schedule(static)
 #endif
@@ -126,7 +127,7 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
     const float *in = ((float *)i) + ch*k*roi_out->width;
     float *out = ((float *)o) + ch*k*roi_out->width;
     for (int j=0; j<roi_out->width; j++,in+=4,out+=4)
-      _mm_store_ps(out, (_mm_load_ps(in)-blackv)*scalev);
+      *(v4sf*)out = (*(v4sf*)in-blackv)*scalev;
   }
 
   if(piece->pipe->mask_display)
