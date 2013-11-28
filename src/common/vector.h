@@ -67,7 +67,7 @@ static inline v4si v4si_setall(int32_t x) {
 }
 
 static inline v4sf v4si_to_v4sf(v4si x) {
-  return v4sf_set((float)x[0], (float)x[1], (float)x[2], (float)x[3]);
+  return (v4sf){(float)x[0], (float)x[1], (float)x[2], (float)x[3]};
 }
 
 static inline void vector_sfence() {
