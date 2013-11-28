@@ -19,12 +19,13 @@
 
 #include <math.h>
 #include <assert.h>
-#include <xmmintrin.h>
+
+#include "common/vector.h"
 #include "common/opencl.h"
 #include "common/gaussian.h"
 
 #define CLAMPF(a, mn, mx) ((a) < (mn) ? (mn) : ((a) > (mx) ? (mx) : (a)))
-#define MMCLAMPPS(a, mn, mx) (_mm_min_ps((mx), _mm_max_ps((a), (mn))))
+#define MMCLAMPPS(a, mn, mx) (v4sf_min((mx), v4sf_max((a), (mn))))
 #define BLOCKSIZE 32
 
 static
@@ -315,8 +316,6 @@ dt_gaussian_blur(
   }
 }
 
-
-
 void
 dt_gaussian_blur_4c(
   dt_gaussian_t *g,
@@ -334,8 +333,8 @@ dt_gaussian_blur_4c(
 
   compute_gauss_params(g->sigma, g->order, &a0, &a1, &a2, &a3, &b1, &b2, &coefp, &coefn);
 
-  const __m128 Labmax = _mm_set_ps(g->max[3], g->max[2], g->max[1], g->max[0]);
-  const __m128 Labmin = _mm_set_ps(g->min[3], g->min[2], g->min[1], g->min[0]);
+  const v4sf Labmax = v4sf_set(g->max[3], g->max[2], g->max[1], g->max[0]);
+  const v4sf Labmin = v4sf_set(g->min[3], g->min[2], g->min[1], g->min[0]);
 
   float *temp = g->buf;
 
@@ -346,19 +345,19 @@ dt_gaussian_blur_4c(
 #endif
   for(int i=0; i<width; i++)
   {
-    __m128 xp = _mm_setzero_ps();
-    __m128 yb = _mm_setzero_ps();
-    __m128 yp = _mm_setzero_ps();
-    __m128 xc = _mm_setzero_ps();
-    __m128 yc = _mm_setzero_ps();
-    __m128 xn = _mm_setzero_ps();
-    __m128 xa = _mm_setzero_ps();
-    __m128 yn = _mm_setzero_ps();
-    __m128 ya = _mm_setzero_ps();
+    v4sf xp = v4sf_setall(0.f);
+    v4sf yb = v4sf_setall(0.f);
+    v4sf yp = v4sf_setall(0.f);
+    v4sf xc = v4sf_setall(0.f);
+    v4sf yc = v4sf_setall(0.f);
+    v4sf xn = v4sf_setall(0.f);
+    v4sf xa = v4sf_setall(0.f);
+    v4sf yn = v4sf_setall(0.f);
+    v4sf ya = v4sf_setall(0.f);
 
     // forward filter
-    xp = MMCLAMPPS(_mm_load_ps(in+i*ch), Labmin, Labmax);
-    yb = _mm_mul_ps(_mm_set_ps1(coefp), xp);
+    xp = MMCLAMPPS(*(v4sf*)(in+i*ch), Labmin, Labmax);
+    yb = coefp * xp;
     yp = yb;
 
 
@@ -366,14 +365,12 @@ dt_gaussian_blur_4c(
     {
       int offset = (i + j * width)*ch;
 
-      xc = MMCLAMPPS(_mm_load_ps(in+offset), Labmin, Labmax);
+      xc = MMCLAMPPS(*(v4sf*)(in+offset), Labmin, Labmax);
 
 
-      yc = _mm_add_ps(_mm_mul_ps(xc, _mm_set_ps1(a0)),
-                      _mm_sub_ps(_mm_mul_ps(xp, _mm_set_ps1(a1)),
-                                 _mm_add_ps(_mm_mul_ps(yp, _mm_set_ps1(b1)), _mm_mul_ps(yb, _mm_set_ps1(b2)))));
+      yc = (xc * a0) + ((xp*a1)-((yp*b1)+(yb*b2)));
 
-      _mm_store_ps(temp+offset, yc);
+      *(v4sf*)(temp+offset) = yc;
 
       xp = xc;
       yb = yp;
@@ -382,20 +379,18 @@ dt_gaussian_blur_4c(
     }
 
     // backward filter
-    xn = MMCLAMPPS(_mm_load_ps(in+((height - 1) * width + i)*ch), Labmin, Labmax);
+    xn = MMCLAMPPS(*(v4sf*)(in+((height - 1) * width + i)*ch), Labmin, Labmax);
     xa = xn;
-    yn = _mm_mul_ps(_mm_set_ps1(coefn), xn);
+    yn = coefn * xn;
     ya = yn;
 
     for(int j=height - 1; j > -1; j--)
     {
       int offset = (i + j * width)*ch;
 
-      xc = MMCLAMPPS(_mm_load_ps(in+offset), Labmin, Labmax);
+      xc = MMCLAMPPS(*(v4sf*)(in+offset), Labmin, Labmax);
 
-      yc = _mm_add_ps(_mm_mul_ps(xn, _mm_set_ps1(a2)),
-                      _mm_sub_ps(_mm_mul_ps(xa, _mm_set_ps1(a3)),
-                                 _mm_add_ps(_mm_mul_ps(yn, _mm_set_ps1(b1)), _mm_mul_ps(ya, _mm_set_ps1(b2)))));
+      yc = ((xn*a2)+(xa*a3))-((yn*b1)+(ya*b2));
 
 
       xa = xn;
@@ -403,7 +398,7 @@ dt_gaussian_blur_4c(
       ya = yn;
       yn = yc;
 
-      _mm_store_ps(temp+offset, _mm_add_ps(_mm_load_ps(temp+offset), yc));
+      *(v4sf*)(temp+offset) += yc;
     }
   }
 
@@ -413,19 +408,19 @@ dt_gaussian_blur_4c(
 #endif
   for(int j=0; j<height; j++)
   {
-    __m128 xp = _mm_setzero_ps();
-    __m128 yb = _mm_setzero_ps();
-    __m128 yp = _mm_setzero_ps();
-    __m128 xc = _mm_setzero_ps();
-    __m128 yc = _mm_setzero_ps();
-    __m128 xn = _mm_setzero_ps();
-    __m128 xa = _mm_setzero_ps();
-    __m128 yn = _mm_setzero_ps();
-    __m128 ya = _mm_setzero_ps();
+    v4sf xp = v4sf_setall(0.f);
+    v4sf yb = v4sf_setall(0.f);
+    v4sf yp = v4sf_setall(0.f);
+    v4sf xc = v4sf_setall(0.f);
+    v4sf yc = v4sf_setall(0.f);
+    v4sf xn = v4sf_setall(0.f);
+    v4sf xa = v4sf_setall(0.f);
+    v4sf yn = v4sf_setall(0.f);
+    v4sf ya = v4sf_setall(0.f);
 
     // forward filter
-    xp = MMCLAMPPS(_mm_load_ps(temp+j*width*ch), Labmin, Labmax);
-    yb = _mm_mul_ps(_mm_set_ps1(coefp), xp);
+    xp = MMCLAMPPS(*(v4sf*)(temp+j*width*ch), Labmin, Labmax);
+    yb = coefp*xp;
     yp = yb;
 
 
@@ -433,13 +428,11 @@ dt_gaussian_blur_4c(
     {
       int offset = (i + j * width)*ch;
 
-      xc = MMCLAMPPS(_mm_load_ps(temp+offset), Labmin, Labmax);
+      xc = MMCLAMPPS(*(v4sf*)(temp+offset), Labmin, Labmax);
 
-      yc = _mm_add_ps(_mm_mul_ps(xc, _mm_set_ps1(a0)),
-                      _mm_sub_ps(_mm_mul_ps(xp, _mm_set_ps1(a1)),
-                                 _mm_add_ps(_mm_mul_ps(yp, _mm_set_ps1(b1)), _mm_mul_ps(yb, _mm_set_ps1(b2)))));
+      yc = ((xc*a0)+((xp*a1)-((yp*b1)+(yb*b2))));
 
-      _mm_store_ps(out+offset, yc);
+      *(v4sf*)(out+offset) = yc;
 
       xp = xc;
       yb = yp;
@@ -447,9 +440,9 @@ dt_gaussian_blur_4c(
     }
 
     // backward filter
-    xn = MMCLAMPPS(_mm_load_ps(temp+((j + 1)*width - 1)*ch), Labmin, Labmax);
+    xn = MMCLAMPPS(*(v4sf*)(temp+((j + 1)*width - 1)*ch), Labmin, Labmax);
     xa = xn;
-    yn = _mm_mul_ps(_mm_set_ps1(coefn), xn);
+    yn = coefn*xn;
     ya = yn;
 
 
@@ -457,19 +450,16 @@ dt_gaussian_blur_4c(
     {
       int offset = (i + j * width)*ch;
 
-      xc = MMCLAMPPS(_mm_load_ps(temp+offset), Labmin, Labmax);
+      xc = MMCLAMPPS(*(v4sf*)(temp+offset), Labmin, Labmax);
 
-      yc = _mm_add_ps(_mm_mul_ps(xn, _mm_set_ps1(a2)),
-                      _mm_sub_ps(_mm_mul_ps(xa, _mm_set_ps1(a3)),
-                                 _mm_add_ps(_mm_mul_ps(yn, _mm_set_ps1(b1)), _mm_mul_ps(ya, _mm_set_ps1(b2)))));
-
+      yc = (xn*a2)+((xa*a3)-((yn*b1)+(ya*b2)));
 
       xa = xn;
       xn = xc;
       ya = yn;
       yn = yc;
 
-      _mm_store_ps(out+offset, _mm_add_ps(_mm_load_ps(out+offset), yc));
+      *(v4sf*)(out+offset) += yc;
     }
   }
 }
