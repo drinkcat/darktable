@@ -23,6 +23,7 @@
 #include "common/imageio.h"
 #include "common/imageio_module.h"
 #include "common/imageio_jpeg.h"
+#include "common/vector.h"
 #include "common/mipmap_cache.h"
 #include "control/conf.h"
 #include "control/jobs.h"
@@ -41,7 +42,6 @@
 #include <glib.h>
 #include <glib/gstdio.h>
 #include <errno.h>
-#include <xmmintrin.h>
 
 #define DT_MIPMAP_CACHE_FILE_MAGIC 0xD71337
 #define DT_MIPMAP_CACHE_FILE_VERSION 23
@@ -60,7 +60,7 @@ struct dt_mipmap_buffer_dsc
 
 // last resort mem alloc for dead images. sizeof(dt_mipmap_buffer_dsc) + dead image pixels (8x8)
 // __m128 type for sse alignment.
-static __m128 dt_mipmap_cache_static_dead_image[1 + 64];
+static v4sf dt_mipmap_cache_static_dead_image[1 + 64];
 
 static inline void
 dead_image_8(dt_mipmap_buffer_t *buf)
@@ -92,9 +92,9 @@ dead_image_f(dt_mipmap_buffer_t *buf)
   struct dt_mipmap_buffer_dsc* dsc = (struct dt_mipmap_buffer_dsc*)buf->buf - 1;
   dsc->width = dsc->height = 8;
   assert(dsc->size > 64*4*sizeof(float));
-  const __m128 X = _mm_set1_ps(1.0f);
-  const __m128 o = _mm_set1_ps(0.0f);
-  const __m128 image[] =
+  const v4sf X = v4sf_setall(1.0f);
+  const v4sf o = v4sf_setall(0.0f);
+  const v4sf image[] =
   {
     o, o, o, o, o, o, o, o,
     o, o, X, X, X, X, o, o,
@@ -105,7 +105,7 @@ dead_image_f(dt_mipmap_buffer_t *buf)
     o, o, X, X, X, X, o, o,
     o, o, o, o, o, o, o, o
   };
-  memcpy(buf->buf, image, sizeof(__m128)*64);
+  memcpy(buf->buf, image, sizeof(v4sf)*64);
 }
 
 static inline int32_t
