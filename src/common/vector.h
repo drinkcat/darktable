@@ -50,14 +50,6 @@ static inline v4sf v4sf_max(v4sf x1, v4sf x2) {
 
 typedef int32_t v4si __attribute__ ((vector_size (16)));
 
-static inline v4sf v4sf_sign(v4sf x) {
-  return (v4sf)(-(x > 0) + (x < 0));
-}
-
-static inline v4sf v4sf_abs(v4sf x) {
-  return v4sf_sign(x)*x;
-}
-
 static inline v4si v4si_set(int32_t x3, int32_t x2, int32_t x1, int32_t x0) {
   return (v4si){x0,x1,x2,x3};
 }
@@ -68,6 +60,14 @@ static inline v4si v4si_setall(int32_t x) {
 
 static inline v4sf v4si_to_v4sf(v4si x) {
   return (v4sf){(float)x[0], (float)x[1], (float)x[2], (float)x[3]};
+}
+
+static inline v4sf v4sf_sign(v4sf x) {
+  return v4si_to_v4sf(-(x > 0) + (x < 0));
+}
+
+static inline v4sf v4sf_abs(v4sf x) {
+  return v4sf_sign(x)*x;
 }
 
 static inline void vector_sfence() {

@@ -19,6 +19,7 @@
 #include "develop/tiling.h"
 #include "common/opencl.h"
 #include "common/debug.h"
+#include "common/vector.h"
 #include "control/conf.h"
 #include "gui/accelerators.h"
 #include "gui/draw.h"
@@ -28,9 +29,9 @@
 #include "control/control.h"
 #include <memory.h>
 #include <stdlib.h>
-#include <xmmintrin.h>
+
 // SSE4 actually not used yet.
-// #include <smmintrin.h>
+
 
 #define INSET 5
 #define INFL .3f
@@ -136,24 +137,34 @@ void connect_key_accels(dt_iop_module_t *self)
                               ((dt_iop_atrous_gui_data_t*)self->gui_data)->mix);
 }
 
-
 #define ALIGNED(a) __attribute__((aligned(a)))
 #define VEC4(a) {(a), (a), (a), (a)}
 
-static const __m128 fone ALIGNED(16) = VEC4(0x3f800000u);
-static const __m128 femo ALIGNED(16) = VEC4(0x00adf880u);
-static const __m128 ooo1 ALIGNED(16) = {0.f, 0.f, 0.f, 1.f};
+static const v4sf fone ALIGNED(16) = VEC4(0x3f800000u);
+static const v4sf femo ALIGNED(16) = VEC4(0x00adf880u);
+static const v4sf ooo1 ALIGNED(16) = {0.f, 0.f, 0.f, 1.f};
 
+#if HAVE_SSE
 /* SSE intrinsics version of dt_fast_expf defined in darktable.h */
-static __m128  inline
-dt_fast_expf_sse(const __m128 x)
+static v4sf  inline
+dt_fast_expf_sse(const v4sf x)
 {
-  __m128  f = _mm_add_ps(fone, _mm_mul_ps(x, femo)); // f(n) = i1 + x(n)*(i2-i1)
-  __m128i i = _mm_cvtps_epi32(f);                    // i(n) = int(f(n))
-  __m128i mask = _mm_srai_epi32(i, 31);              // mask(n) = 0xffffffff if i(n) < 0
+  v4sf  f = fone+(x*femo); // f(n) = i1 + x(n)*(i2-i1)
+  v4sf i = f;                    // i(n) = int(f(n))
+  v4si mask = _mm_srai_epi32(i, 31);              // mask(n) = 0xffffffff if i(n) < 0
   i = _mm_andnot_si128(mask, i);                     // i(n) = 0 if i(n) < 0
   return _mm_castsi128_ps(i);                        // return *(float*)&i
 }
+#else
+static v4sf  inline
+dt_fast_expf_vec(const v4sf v)
+{
+  return (v4sf){dt_fast_expf(v[0]),
+                dt_fast_expf(v[1]),
+                dt_fast_expf(v[2]),
+                dt_fast_expf(v[3])};
+}
+#endif
 
 /* Computes the vector
  * (wl, wc, wc, 1)
@@ -164,31 +175,29 @@ dt_fast_expf_sse(const __m128 x)
  * wc = exp(-sharpen*(SQR(c1[1] - c2[1]) + SQR(c1[2] - c2[2]))
  *    = exp(-s*(d2+d3)) (as noted in code comments below)
  */
-static __m128  inline
-weight_sse(const __m128 *c1, const __m128 *c2, const float sharpen)
+/* FIXME: Can be optimized */
+static v4sf  inline
+weight_sse(const v4sf *c1, const v4sf *c2, const float sharpen)
 {
-  const __m128 vsharpen = _mm_set1_ps(-sharpen);  // (-s, -s, -s, -s)
-  __m128 diff = _mm_sub_ps(*c1, *c2);
-  __m128 square = _mm_mul_ps(diff, diff);         // (?, d3, d2, d1)
-  __m128 square2 = _mm_shuffle_ps(square, square, _MM_SHUFFLE(3, 1, 2, 0)); // (?, d2, d3, d1)
-  __m128 added = _mm_add_ps(square, square2);     // (?, d2+d3, d2+d3, 2*d1)
-  added = _mm_sub_ss(added, square);              // (?, d2+d3, d2+d3, d1)
-  __m128 sharpened = _mm_mul_ps(added, vsharpen); // (?, -s*(d2+d3), -s*(d2+d3), -s*d1)
-  __m128 exp = dt_fast_expf_sse(sharpened);       // (?, wc, wc, wl)
-  exp = _mm_castsi128_ps(_mm_slli_si128(_mm_castps_si128(exp), 4)); // (wc, wc, wl, 0)
-  exp = _mm_castsi128_ps(_mm_srli_si128(_mm_castps_si128(exp), 4)); // (0, wc, wc, wl)
-  exp = _mm_or_ps(exp, ooo1); // (1, wc, wc, wl)
-  return exp;
+  const v4sf vsharpen = v4sf_setall(-sharpen);  // (-s, -s, -s, -s)
+  v4sf diff = *c1 - *c2;
+  v4sf square = diff*diff;         // (?, d3, d2, d1)
+  v4sf square2 = __builtin_shuffle(square, v4si_set(3, 1, 2, 0)); // (?, d2, d3, d1)
+  v4sf added = square+square2;     // (?, d2+d3, d2+d3, 2*d1)
+  added = added-square;              // (?, d2+d3, d2+d3, d1)
+  v4sf sharpened = added*vsharpen; // (?, -s*(d2+d3), -s*(d2+d3), -s*d1)
+  v4sf exp = dt_fast_expf_vec(sharpened);       // (?, wc, wc, wl)
+  return v4sf_set(1.f, exp[2], exp[1], exp[0]);
 }
 
 #define SUM_PIXEL_CONTRIBUTION_COMMON(ii, jj) \
   do { \
-    const __m128 f = _mm_set1_ps(filter[(ii)]*filter[(jj)]); \
-    const __m128 wp = weight_sse(px, px2, sharpen); \
-    const __m128 w = _mm_mul_ps(f, wp); \
-    const __m128 pd = _mm_mul_ps(w, *px2); \
-    sum = _mm_add_ps(sum, pd); \
-    wgt = _mm_add_ps(wgt, w); \
+    const v4sf f = v4sf_setall(filter[(ii)]*filter[(jj)]); \
+    const v4sf wp = weight_sse(px, px2, sharpen); \
+    const v4sf w = f*wp; \
+    const v4sf pd = w * *px2; \
+    sum = sum+pd; \
+    wgt = wgt+w; \
   } while (0)
 
 #define SUM_PIXEL_CONTRIBUTION_WITH_TEST(ii, jj) \
@@ -203,26 +212,26 @@ weight_sse(const __m128 *c1, const __m128 *c2, const float sharpen)
     if(y < 0)       y = 0; \
     if(y >= height) y = height - 1; \
     \
-    px2 = ((__m128 *)in) + x + y*width; \
+    px2 = ((v4sf *)in) + x + y*width; \
     \
     SUM_PIXEL_CONTRIBUTION_COMMON(ii, jj); \
   } while (0)
 
 #define ROW_PROLOGUE \
-  const __m128 *px = ((__m128 *)in) + j*width; \
-  const __m128 *px2; \
+  const v4sf *px = ((v4sf *)in) + j*width; \
+  const v4sf *px2; \
   float *pdetail = detail + 4*j*width; \
   float *pcoarse = out + 4*j*width;
 
 #define SUM_PIXEL_PROLOGUE \
-  __m128 sum = _mm_setzero_ps(); \
-  __m128 wgt = _mm_setzero_ps();
+  v4sf sum = v4sf_setall(0.f); \
+  v4sf wgt = v4sf_setall(0.f);
 
 #define SUM_PIXEL_EPILOGUE \
-  sum = _mm_mul_ps(sum, _mm_rcp_ps(wgt)); \
+  sum = sum*(v4sf_setall(1.f)/wgt);            \
   \
-  _mm_stream_ps(pdetail, _mm_sub_ps(*px, sum)); \
-  _mm_stream_ps(pcoarse, sum); \
+  *(v4sf*)pdetail = *px - sum;                       \
+  *(v4sf*)pcoarse = sum; \
   px++; \
   pdetail+=4; \
   pcoarse+=4;
@@ -284,7 +293,7 @@ eaw_decompose (float *const out, const float *const in, float *const detail, con
     for(int i=2*mult; i<width-2*mult; i++)
     {
       SUM_PIXEL_PROLOGUE
-      px2 = ((__m128*)in) + i-2*mult + (j-2*mult)*width;
+      px2 = ((v4sf*)in) + i-2*mult + (j-2*mult)*width;
       for (int jj=0; jj<5; jj++)
       {
         for (int ii=0; ii<5; ii++)
@@ -335,7 +344,7 @@ eaw_decompose (float *const out, const float *const in, float *const detail, con
     }
   }
 
-  _mm_sfence();
+  vector_sfence();
 }
 
 #undef SUM_PIXEL_CONTRIBUTION_COMMON
@@ -348,8 +357,8 @@ static void
 eaw_synthesize (float *const out, const float *const in, const float *const detail,
                 const float *thrsf, const float *boostf, const int32_t width, const int32_t height)
 {
-  const __m128 threshold = _mm_set_ps(thrsf[3], thrsf[2], thrsf[1], thrsf[0]);
-  const __m128 boost     = _mm_set_ps(boostf[3], boostf[2], boostf[1], boostf[0]);
+  const v4sf threshold = v4sf_set(thrsf[3], thrsf[2], thrsf[1], thrsf[0]);
+  const v4sf boost     = v4sf_set(boostf[3], boostf[2], boostf[1], boostf[0]);
 
 #ifdef _OPENMP
   #pragma omp parallel for default(none) schedule(static)
@@ -357,22 +366,22 @@ eaw_synthesize (float *const out, const float *const in, const float *const deta
   for(int j=0; j<height; j++)
   {
     // TODO: prefetch? _mm_prefetch()
-    const __m128 *pin = (__m128 *)in + j*width;
-    __m128 *pdetail = (__m128 *)detail + j*width;
-    float *pout = out + 4*j*width;
+    const v4sf *pin = (v4sf *)in + j*width;
+    v4sf *pdetail = (v4sf *)detail + j*width;
+    v4sf *pout = (v4sf*)out + j*width;
     for(int i=0; i<width; i++)
     {
-      const __m128i maski = _mm_set1_epi32(0x80000000u);
-      const __m128 *mask = (__m128*)&maski;
-      const __m128 absamt = _mm_max_ps(_mm_setzero_ps(), _mm_sub_ps(_mm_andnot_ps(*mask, *pdetail), threshold));
-      const __m128 amount = _mm_or_ps(_mm_and_ps(*pdetail, *mask), absamt);
-      _mm_stream_ps(pout, _mm_add_ps(*pin, _mm_mul_ps(boost, amount)));
+      /* Could be optimized with simple and masks (see original implementation) */
+      const v4sf absamt = v4sf_max(v4sf_setall(0.f), v4sf_abs(*pdetail) - threshold);
+      const v4sf amount = v4sf_sign(*pdetail) * absamt;
+      *pout = *pin + (boost*amount);
       pdetail ++;
       pin ++;
-      pout += 4;
+      pout ++;
     }
   }
-  _mm_sfence();
+
+  vector_sfence();
 }
 
 static int
