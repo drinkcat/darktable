@@ -22,6 +22,7 @@
 #include "gui/gtk.h"
 #include "common/darktable.h"
 #include "common/interpolation.h"
+#include "common/vector.h"
 #include "control/control.h"
 #include "develop/develop.h"
 #include "develop/tiling.h"
@@ -30,7 +31,7 @@
 #include <string.h>
 
 // we assume people have -msee support.
-#include <xmmintrin.h>
+
 
 #define BLOCKSIZE  2048		/* maximum blocksize. must be a power of 2 and will be automatically reduced if needed */
 
@@ -467,6 +468,8 @@ demosaic_ppg(float *out, const float *in, dt_iop_roi_t *roi_out, const dt_iop_ro
     {
       const int c = FC(j,i,filters);
       // prefetch what we need soon (load to cpu caches)
+#if 0
+      /* FIXME: Can this be architecture independent? */
       _mm_prefetch((char *)buf_in + 256, _MM_HINT_NTA); // TODO: try HINT_T0-3
       _mm_prefetch((char *)buf_in +   roi_in->width + 256, _MM_HINT_NTA);
       _mm_prefetch((char *)buf_in + 2*roi_in->width + 256, _MM_HINT_NTA);
@@ -474,7 +477,8 @@ demosaic_ppg(float *out, const float *in, dt_iop_roi_t *roi_out, const dt_iop_ro
       _mm_prefetch((char *)buf_in -   roi_in->width + 256, _MM_HINT_NTA);
       _mm_prefetch((char *)buf_in - 2*roi_in->width + 256, _MM_HINT_NTA);
       _mm_prefetch((char *)buf_in - 3*roi_in->width + 256, _MM_HINT_NTA);
-      __m128 col = _mm_load_ps(buf);
+#endif
+      v4sf col = *(v4sf*)buf;
       float *color = (float*)&col;
       const float pc = buf_in[0];
       // if(__builtin_expect(c == 0 || c == 2, 1))
@@ -529,7 +533,7 @@ demosaic_ppg(float *out, const float *in, dt_iop_roi_t *roi_out, const dt_iop_ro
     }
   }
   // SFENCE (make sure stuff is stored now)
-  // _mm_sfence();
+  // vector_sfence();
 
   // for all pixels: interpolate colors into float array
 #ifdef _OPENMP
@@ -541,12 +545,15 @@ demosaic_ppg(float *out, const float *in, dt_iop_roi_t *roi_out, const dt_iop_ro
     for (int i=1; i < roi_out->width-1; i++)
     {
       // also prefetch direct nbs top/bottom
+#if 0
+      /* FIXME: Can this be architecture independent? */
       _mm_prefetch((char *)buf + 256, _MM_HINT_NTA);
       _mm_prefetch((char *)buf - roi_out->width*4*sizeof(float) + 256, _MM_HINT_NTA);
       _mm_prefetch((char *)buf + roi_out->width*4*sizeof(float) + 256, _MM_HINT_NTA);
+#endif
 
       const int c = FC(j, i, filters);
-      __m128 col = _mm_load_ps(buf);
+      v4sf col = *(v4sf*)buf;
       float *color = (float *)&col;
       // fill all four pixels with correctly interpolated stuff: r/b for green1/2
       // b for r and r for b
@@ -605,7 +612,7 @@ demosaic_ppg(float *out, const float *in, dt_iop_roi_t *roi_out, const dt_iop_ro
       buf += 4;
     }
   }
-  // _mm_sfence();
+  // vector_sfence();
   if (median)
     dt_free_align((float*)in);
 }
