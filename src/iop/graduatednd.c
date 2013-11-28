@@ -33,11 +33,12 @@
 #include "common/colorspaces.h"
 #include "common/debug.h"
 #include "common/opencl.h"
+#include "common/vector.h"
 #include "dtgtk/gradientslider.h"
 #include "gui/accelerators.h"
 #include "gui/gtk.h"
 #include "gui/presets.h"
-#include <xmmintrin.h>
+
 
 #define CLIP(x) 		((x<0.0f)?0.0f:(x>1.0f)?1.0f:x)
 
@@ -692,8 +693,8 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
       float length = (sinv * (-1.0+ix*hw_inv) - cosv * (-1.0+(iy+y)*hh_inv) - 1.0 + offset) * filter_compression;
       const float length_inc = sinv * hw_inv * filter_compression;
 
-      __m128 c = _mm_set_ps(0,color[2],color[1],color[0]);
-      __m128 c1 = _mm_sub_ps(_mm_set1_ps(1.0f),c);
+      v4sf c = v4sf_set(0,color[2],color[1],color[0]);
+      v4sf c1 = v4sf_setall(1.0f)-c;
 
       for(int x=0; x<roi_out->width; x++, in+=ch, out+=ch)
       {
@@ -708,17 +709,17 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
         float d3 = d2*t*0.25f;
         float d = 1+t+d1+d2+d3; /* taylor series for e^x till x^4 */
         //printf("%d %d  %f\n",y,x,d);
-        __m128 density = _mm_set1_ps(d);
-        density = _mm_mul_ps(density,density);
-        density = _mm_mul_ps(density,density);
-        density = _mm_mul_ps(density,density);
+        v4sf density = v4sf_setall(d);
+        density = density * density;
+        density = density * density;
+        density = density * density;
 #else
         // use fair exp2f
-        __m128 density = _mm_set1_ps(exp2f(data->density * CLIP( 0.5f+length )));
+        v4sf density = v4sf_setall(exp2f(data->density * CLIP( 0.5f+length )));
 #endif
 
         /* max(0,in / (c + (1-c)*density)) */
-        _mm_stream_ps(out,_mm_max_ps(_mm_set1_ps(0.0f),_mm_div_ps(_mm_load_ps(in),_mm_add_ps(c,_mm_mul_ps(c1,density)))));
+        *(v4sf*)out = v4sf_max(v4sf_setall(0.0f),*(v4sf*)in/(c+c1*density));
 
         length += length_inc;
       }
@@ -738,8 +739,8 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
       float length = (sinv * (-1.0f+ix*hw_inv) - cosv * (-1.0f+(iy+y)*hh_inv) - 1.0f + offset) * filter_compression;
       const float length_inc = sinv * hw_inv * filter_compression;
 
-      __m128 c = _mm_set_ps(0,color[2],color[1],color[0]);
-      __m128 c1 = _mm_sub_ps(_mm_set1_ps(1.0f),c);
+      v4sf c = v4sf_set(0,color[2],color[1],color[0]);
+      v4sf c1 = v4sf_setall(1.0f)-c;
 
       for(int x=0; x<roi_out->width; x++, in+=ch, out+=ch)
       {
@@ -753,22 +754,22 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
         float d2 = d1*t*0.333333333f;
         float d3 = d2*t*0.25f;
         float d = 1+t+d1+d2+d3; /* taylor series for e^x till x^4 */
-        __m128 density = _mm_set1_ps(d);
-        density = _mm_mul_ps(density,density);
-        density = _mm_mul_ps(density,density);
-        density = _mm_mul_ps(density,density);
+        v4sf density = v4sf_setall(d);
+        density = density*density;
+        density = density*density;
+        density = density*density;
 #else
-        __m128 density = _mm_set1_ps(exp2f(-data->density * CLIP( 0.5f-length )));
+        v4sf density = _mm_set1_ps(exp2f(-data->density * CLIP( 0.5f-length )));
 #endif
 
         /* max(0,in * (c + (1-c)*density)) */
-        _mm_stream_ps(out,_mm_max_ps(_mm_set1_ps(0.0f),_mm_mul_ps(_mm_load_ps(in),_mm_add_ps(c,_mm_mul_ps(c1,density)))));
+        *(v4sf*)out = v4sf_max(v4sf_setall(0.0f),*(v4sf*)in*(c+c1*density));
 
         length += length_inc;
       }
     }
   }
-  _mm_sfence();
+  vector_sfence();
 
   if(piece->pipe->mask_display)
     dt_iop_alpha_copy(ivoid, ovoid, roi_out->width, roi_out->height);
