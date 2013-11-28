@@ -24,13 +24,14 @@
 #include "control/control.h"
 #include "common/noiseprofiles.h"
 #include "common/opencl.h"
+#include "common/vector.h"
 #include "gui/accelerators.h"
 #include "gui/presets.h"
 #include "gui/gtk.h"
 #include "common/opencl.h"
 #include <gtk/gtk.h>
 #include <stdlib.h>
-#include <xmmintrin.h>
+
 
 #define BLOCKSIZE 2048		/* maximum blocksize. must be a power of 2 and will be automatically reduced if needed */
 #define REDUCESIZE 64
@@ -289,30 +290,29 @@ backtransform(
 // begin wavelet code:
 // =====================================================================================
 
-static __m128  inline
-weight_sse(const __m128 *c1, const __m128 *c2, const float inv_sigma2)
+static v4sf  inline
+weight_sse(const v4sf *c1, const v4sf *c2, const float inv_sigma2)
 {
   // return _mm_set1_ps(1.0f);
 #if 1
   // 3d distance based on color
-  __m128 diff = _mm_sub_ps(*c1, *c2);
-  __m128 sqr  = _mm_mul_ps(diff, diff);
+  v4sf diff = *c1 - *c2;
+  v4sf sqr  = diff * diff;
   float *fsqr = (float *)&sqr;
   const float dot = (fsqr[0] + fsqr[1] + fsqr[2])*inv_sigma2;
   const float var = 0.02f; // FIXME: this should ideally depend on the image before noise stabilizing transforms!
   const float off2 = 9.0f;// (3 sigma)^2
-  return _mm_set1_ps(fast_mexp2f(MAX(0, dot*var - off2)));
+  return v4sf_setall(fast_mexp2f(MAX(0, dot*var - off2)));
 #endif
 }
 
 #define SUM_PIXEL_CONTRIBUTION_COMMON(ii, jj) \
   do { \
-    const __m128 f = _mm_set1_ps(filter[(ii)]*filter[(jj)]); \
-    const __m128 wp = weight_sse(px, px2, inv_sigma2); \
-    const __m128 w = _mm_mul_ps(f, wp); \
-    const __m128 pd = _mm_mul_ps(w, *px2); \
-    sum = _mm_add_ps(sum, pd); \
-    wgt = _mm_add_ps(wgt, w); \
+    const v4sf wp = weight_sse(px, px2, inv_sigma2); \
+    const v4sf w = filter[(ii)]*filter[(jj)]*wp; \
+    const v4sf pd = w * *px2; \
+    sum = sum+pd; \
+    wgt = wgt+w; \
   } while (0)
 
 #define SUM_PIXEL_CONTRIBUTION_WITH_TEST(ii, jj) \
@@ -327,29 +327,29 @@ weight_sse(const __m128 *c1, const __m128 *c2, const float inv_sigma2)
     if(y < 0)       y = 0; \
     if(y >= height) y = height - 1; \
     \
-    px2 = ((__m128 *)in) + x + y*width; \
+    px2 = ((v4sf *)in) + x + y*width; \
     \
     SUM_PIXEL_CONTRIBUTION_COMMON(ii, jj); \
   } while (0)
 
 #define ROW_PROLOGUE \
-  const __m128 *px = ((__m128 *)in) + j*width; \
-  const __m128 *px2; \
-  float *pdetail = detail + 4*j*width; \
-  float *pcoarse = out + 4*j*width;
+  const v4sf *px = ((v4sf *)in) + j*width; \
+  const v4sf *px2; \
+  v4sf *pdetail = (v4sf*)detail + j*width;           \
+  v4sf *pcoarse = (v4sf*)out + j*width;
 
 #define SUM_PIXEL_PROLOGUE \
-  __m128 sum = _mm_setzero_ps(); \
-  __m128 wgt = _mm_setzero_ps();
+  v4sf sum = v4sf_setall(0.f); \
+  v4sf wgt = v4sf_setall(0.f);
 
 #define SUM_PIXEL_EPILOGUE \
-  sum = _mm_div_ps(sum, wgt); \
+  sum = sum/wgt; \
   \
-  _mm_stream_ps(pdetail, _mm_sub_ps(*px, sum)); \
-  _mm_stream_ps(pcoarse, sum); \
+  *pdetail = *px - sum;            \
+  *pcoarse = sum; \
   px++; \
-  pdetail+=4; \
-  pcoarse+=4;
+  pdetail++; \
+  pcoarse++;
 
 static void
 eaw_decompose (float *const out, const float *const in, float *const detail, const int scale,
@@ -408,7 +408,7 @@ eaw_decompose (float *const out, const float *const in, float *const detail, con
     for(int i=2*mult; i<width-2*mult; i++)
     {
       SUM_PIXEL_PROLOGUE
-      px2 = ((__m128*)in) + i-2*mult + (j-2*mult)*width;
+      px2 = ((v4sf*)in) + i-2*mult + (j-2*mult)*width;
       for (int jj=0; jj<5; jj++)
       {
         for (int ii=0; ii<5; ii++)
@@ -459,7 +459,7 @@ eaw_decompose (float *const out, const float *const in, float *const detail, con
     }
   }
 
-  _mm_sfence();
+  vector_sfence();
 }
 
 #undef SUM_PIXEL_CONTRIBUTION_COMMON
@@ -472,8 +472,8 @@ static void
 eaw_synthesize (float *const out, const float *const in, const float *const detail,
                 const float *thrsf, const float *boostf, const int32_t width, const int32_t height)
 {
-  const __m128 threshold = _mm_set_ps(thrsf[3], thrsf[2], thrsf[1], thrsf[0]);
-  const __m128 boost     = _mm_set_ps(boostf[3], boostf[2], boostf[1], boostf[0]);
+  const v4sf threshold = v4sf_set(thrsf[3], thrsf[2], thrsf[1], thrsf[0]);
+  const v4sf boost     = v4sf_set(boostf[3], boostf[2], boostf[1], boostf[0]);
 
 #ifdef _OPENMP
   #pragma omp parallel for default(none) schedule(static)
@@ -481,25 +481,24 @@ eaw_synthesize (float *const out, const float *const in, const float *const deta
   for(int j=0; j<height; j++)
   {
     // TODO: prefetch? _mm_prefetch()
-    const __m128 *pin = (__m128 *)in + j*width;
-    __m128 *pdetail = (__m128 *)detail + j*width;
-    float *pout = out + 4*j*width;
+    const v4sf *pin = (v4sf *)in + j*width;
+    v4sf *pdetail = (v4sf *)detail + j*width;
+    v4sf *pout = (v4sf*)out + j*width;
     for(int i=0; i<width; i++)
     {
 #if 1
-      const __m128i maski = _mm_set1_epi32(0x80000000u);
-      const __m128 *mask = (__m128*)&maski;
-      const __m128 absamt = _mm_max_ps(_mm_setzero_ps(), _mm_sub_ps(_mm_andnot_ps(*mask, *pdetail), threshold));
-      const __m128 amount = _mm_or_ps(_mm_and_ps(*pdetail, *mask), absamt);
-      _mm_stream_ps(pout, _mm_add_ps(*pin, _mm_mul_ps(boost, amount)));
+      /* FIXME: Revert to faster and mask solution */
+      const v4sf absamt = v4sf_max(v4sf_setall(0.f), v4sf_abs(*pdetail) - threshold);
+      const v4sf amount = v4sf_sign(*pdetail) * absamt;
+      *pout = *pin + (boost*amount);
 #endif
       // _mm_stream_ps(pout, _mm_add_ps(*pin, *pdetail));
       pdetail ++;
       pin ++;
-      pout += 4;
+      pout ++;
     }
   }
-  _mm_sfence();
+  vector_sfence();
 }
 // =====================================================================================
 
@@ -774,8 +773,8 @@ void process_nlmeans(
             // TODO: could put that outside the loop.
             // DEBUG XXX bring back to computable range:
             const float norm = .015f/(2*P+1);
-            const __m128 iv = { ins[0], ins[1], ins[2], 1.0f };
-            _mm_store_ps(out, _mm_load_ps(out) + iv * _mm_set1_ps(fast_mexp2f(fmaxf(0.0f, slide*norm-2.0f))));
+            const v4sf iv = (v4sf){ ins[0], ins[1], ins[2], 1.0f };
+            *(v4sf*)out += iv * fast_mexp2f(fmaxf(0.0f, slide*norm-2.0f));
             // _mm_store_ps(out, _mm_load_ps(out) + iv * _mm_set1_ps(fast_mexp2f(fmaxf(0.0f, slide*norm))));
           }
           s   ++;
@@ -787,69 +786,69 @@ void process_nlmeans(
           // sliding window in j direction:
           int i = MAX(0, -ki);
           float *s = S + i;
-          const float *inp  = in + 4*i + 4* roi_in->width *(j+P+1);
-          const float *inps = in + 4*i + 4*(roi_in->width *(j+P+1+kj) + ki);
-          const float *inm  = in + 4*i + 4* roi_in->width *(j-P);
-          const float *inms = in + 4*i + 4*(roi_in->width *(j-P+kj) + ki);
+          const v4sf *inp  = (v4sf*)in + i +  roi_in->width *(j+P+1);
+          const v4sf *inps = (v4sf*)in + i + (roi_in->width *(j+P+1+kj) + ki);
+          const v4sf *inm  = (v4sf*)in + i +  roi_in->width *(j-P);
+          const v4sf *inms = (v4sf*)in + i + (roi_in->width *(j-P+kj) + ki);
           const int last = roi_out->width + MIN(0, -ki);
-          for(; ((intptr_t)s & 0xf) != 0 && i<last; i++, inp+=4, inps+=4, inm+=4, inms+=4, s++)
+          for(; ((intptr_t)s & 0xf) != 0 && i<last; i++, inp++, inps++, inm++, inms++, s++)
           {
             float stmp = s[0];
             for(int k=0; k<3; k++)
-              stmp += ((inp[k] - inps[k])*(inp[k] - inps[k])
-                       -  (inm[k] - inms[k])*(inm[k] - inms[k]));
+              stmp += (((*inp)[k] - (*inps)[k])*((*inp)[k] - (*inps)[k])
+                       -  ((*inm)[k] - (*inms)[k])*((*inm)[k] - (*inms)[k]));
             s[0] = stmp;
           }
           /* Process most of the line 4 pixels at a time */
-          for(; i<last-4; i+=4, inp+=16, inps+=16, inm+=16, inms+=16, s+=4)
+          for(; i<last-4; i+=4, inp+=4, inps+=4, inm+=4, inms+=4, s+=4)
           {
-            __m128 sv = _mm_load_ps(s);
-            const __m128 inp1 = _mm_load_ps(inp)    - _mm_load_ps(inps);
-            const __m128 inp2 = _mm_load_ps(inp+4)  - _mm_load_ps(inps+4);
-            const __m128 inp3 = _mm_load_ps(inp+8)  - _mm_load_ps(inps+8);
-            const __m128 inp4 = _mm_load_ps(inp+12) - _mm_load_ps(inps+12);
+            v4sf sv = *(v4sf*)s;
+            const v4sf inp1 = *inp - *inps;
+            const v4sf inp2 = *(inp+1) - *(inps+1);
+            const v4sf inp3 = *(inp+2) - *(inps+2);
+            const v4sf inp4 = *(inp+3) - *(inps+3);
 
-            const __m128 inp12lo = _mm_unpacklo_ps(inp1,inp2);
-            const __m128 inp34lo = _mm_unpacklo_ps(inp3,inp4);
-            const __m128 inp12hi = _mm_unpackhi_ps(inp1,inp2);
-            const __m128 inp34hi = _mm_unpackhi_ps(inp3,inp4);
+            const v4sf inp12lo = __builtin_shuffle(inp1,inp2,(v4si){0,4,1,5});
+            const v4sf inp34lo = __builtin_shuffle(inp3,inp4,(v4si){0,4,1,5});
+            const v4sf inp12hi = __builtin_shuffle(inp1,inp2,(v4si){2,6,3,7});
+            const v4sf inp34hi = __builtin_shuffle(inp3,inp4,(v4si){2,6,3,7});
 
-            const __m128 inpv0 = _mm_movelh_ps(inp12lo,inp34lo);
+            const v4sf inpv0 = __builtin_shuffle(inp12lo,inp34lo,(v4si){0,1,4,5});
             sv += inpv0*inpv0;
 
-            const __m128 inpv1 = _mm_movehl_ps(inp34lo,inp12lo);
+            const v4sf inpv1 = __builtin_shuffle(inp34lo,inp12lo,(v4si){6,7,2,3});
             sv += inpv1*inpv1;
 
-            const __m128 inpv2 = _mm_movelh_ps(inp12hi,inp34hi);
+            const v4sf inpv2 = __builtin_shuffle(inp12hi,inp34hi,(v4si){0,1,4,5});
             sv += inpv2*inpv2;
 
-            const __m128 inm1 = _mm_load_ps(inm)    - _mm_load_ps(inms);
-            const __m128 inm2 = _mm_load_ps(inm+4)  - _mm_load_ps(inms+4);
-            const __m128 inm3 = _mm_load_ps(inm+8)  - _mm_load_ps(inms+8);
-            const __m128 inm4 = _mm_load_ps(inm+12) - _mm_load_ps(inms+12);
+            const v4sf inm1 = *inm - *inms;
+            const v4sf inm2 = *(inm+1) - *(inms+1);
+            const v4sf inm3 = *(inm+2) - *(inms+2);
+            const v4sf inm4 = *(inm+3) - *(inms+3);
 
-            const __m128 inm12lo = _mm_unpacklo_ps(inm1,inm2);
-            const __m128 inm34lo = _mm_unpacklo_ps(inm3,inm4);
-            const __m128 inm12hi = _mm_unpackhi_ps(inm1,inm2);
-            const __m128 inm34hi = _mm_unpackhi_ps(inm3,inm4);
+            const v4sf inm12lo = __builtin_shuffle(inm1,inm2,(v4si){0,4,1,5});
+            const v4sf inm34lo = __builtin_shuffle(inm3,inm4,(v4si){0,4,1,5});
+            const v4sf inm12hi = __builtin_shuffle(inm1,inm2,(v4si){2,6,3,7});
+            const v4sf inm34hi = __builtin_shuffle(inm3,inm4,(v4si){2,6,3,7});
 
-            const __m128 inmv0 = _mm_movelh_ps(inm12lo,inm34lo);
+            const v4sf inmv0 = __builtin_shuffle(inm12lo,inm34lo,(v4si){0,1,4,5});
             sv -= inmv0*inmv0;
 
-            const __m128 inmv1 = _mm_movehl_ps(inm34lo,inm12lo);
+            const v4sf inmv1 = __builtin_shuffle(inm34lo,inm12lo,(v4si){6,7,2,3});
             sv -= inmv1*inmv1;
 
-            const __m128 inmv2 = _mm_movelh_ps(inm12hi,inm34hi);
+            const v4sf inmv2 = __builtin_shuffle(inm12hi,inm34hi,(v4si){0,1,4,5});
             sv -= inmv2*inmv2;
 
-            _mm_store_ps(s, sv);
+            *(v4sf*)s = sv;
           }
-          for(; i<last; i++, inp+=4, inps+=4, inm+=4, inms+=4, s++)
+          for(; i<last; i++, inp++, inps++, inm++, inms++, s++)
           {
             float stmp = s[0];
             for(int k=0; k<3; k++)
-              stmp += ((inp[k] - inps[k])*(inp[k] - inps[k])
-                       -  (inm[k] - inms[k])*(inm[k] - inms[k]));
+              stmp += (((*inp)[k] - (*inps)[k])*((*inp)[k] - (*inps)[k])
+                       - ((*inm)[k] - (*inms)[k])*((*inm)[k] - (*inms)[k]));
             s[0] = stmp;
           }
         }
@@ -863,14 +862,14 @@ void process_nlmeans(
 #endif
   for(int j=0; j<roi_out->height; j++)
   {
-    float *out = ((float *)ovoid) + 4*roi_out->width*j;
+    v4sf *out = ((v4sf *)ovoid) + roi_out->width*j;
     for(int i=0; i<roi_out->width; i++)
     {
-      if(out[3] > 0.0f)
-        _mm_store_ps(out, _mm_mul_ps(_mm_load_ps(out), _mm_set1_ps(1.0f/out[3])));
+      if((*out)[3] > 0.0f)
+        *out = *out/(*out)[3];
       // DEBUG show weights
       // _mm_store_ps(out, _mm_set1_ps(1.0f/out[3]));
-      out += 4;
+      out++;
     }
   }
   // free shared tmp memory:
