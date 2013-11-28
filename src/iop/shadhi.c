@@ -38,7 +38,7 @@
 #include "gui/presets.h"
 #include <gtk/gtk.h>
 #include <inttypes.h>
-#include <xmmintrin.h>
+#include "common/vector.h"
 
 #define CLAMPF(a, mn, mx) ((a) < (mn) ? (mn) : ((a) > (mx) ? (mx) : (a)))
 #define CLAMP_RANGE(x,y,z) (CLAMP(x,y,z))

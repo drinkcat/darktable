@@ -21,7 +21,7 @@
 
 #include "develop/pixelpipe_hb.h"
 
-#include <xmmintrin.h>
+#include "common/vector.h"
 
 /** Available interpolations */
 enum dt_interpolation_type

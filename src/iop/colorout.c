@@ -29,7 +29,7 @@
 #include "common/colorspaces.h"
 #include "common/opencl.h"
 
-#include <xmmintrin.h>
+#include "common/vector.h"
 #include <stdlib.h>
 #include <math.h>
 #include <assert.h>

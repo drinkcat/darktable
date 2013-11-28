@@ -45,7 +45,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <gmodule.h>
-#include <xmmintrin.h>
+#include "common/vector.h"
 #include <time.h>
 
 typedef struct dt_iop_gui_simple_callback_t

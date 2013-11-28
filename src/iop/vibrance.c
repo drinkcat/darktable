@@ -34,7 +34,7 @@
 #include "gui/gtk.h"
 #include <gtk/gtk.h>
 #include <inttypes.h>
-#include <xmmintrin.h>
+#include "common/vector.h"
 
 // NaN-safe clip: NaN compares false and will result in 0.0
 #define CLIP(x) (((x)>=0.0)?((x)<=1.0?(x):1.0):0.0)

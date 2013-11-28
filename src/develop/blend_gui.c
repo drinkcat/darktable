@@ -44,7 +44,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <gmodule.h>
-#include <xmmintrin.h>
+#include "common/vector.h"
 
 
 #define CLAMP_RANGE(x,y,z)      (CLAMP(x,y,z))

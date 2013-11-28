@@ -33,7 +33,7 @@
 #endif
 #include "common/imageio_jpeg.h"
 #include "external/adobe_coeff.c"
-#include <xmmintrin.h>
+#include "common/vector.h"
 #include <stdlib.h>
 #include <math.h>
 #include <assert.h>

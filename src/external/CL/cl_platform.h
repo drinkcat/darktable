@@ -296,7 +296,7 @@ typedef unsigned int cl_GLenum;
     #if defined( __MINGW64__ )
         #include <intrin.h>
     #else
-        #include <xmmintrin.h>
+        #include "common/vector.h"
     #endif
     #if defined( __GNUC__ )
         typedef float __cl_float4   __attribute__((vector_size(16)));

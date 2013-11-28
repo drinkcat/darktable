@@ -22,7 +22,7 @@
 #include <math.h>
 #include <assert.h>
 #include <string.h>
-#include <xmmintrin.h>
+#include "common/vector.h"
 #include "develop/develop.h"
 #include "develop/imageop.h"
 #include "control/control.h"

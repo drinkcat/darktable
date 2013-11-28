@@ -30,7 +30,7 @@
 #include "common/opencl.h"
 #include <gtk/gtk.h>
 #include <stdlib.h>
-#include <xmmintrin.h>
+#include "common/vector.h"
 
 #define BLOCKSIZE 2048		/* maximum blocksize. must be a power of 2 and will be automatically reduced if needed */
 #define REDUCESIZE 64

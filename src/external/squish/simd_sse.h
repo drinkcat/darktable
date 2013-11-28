@@ -26,7 +26,7 @@
 #ifndef SQUISH_SIMD_SSE_H
 #define SQUISH_SIMD_SSE_H
 
-#include <xmmintrin.h>
+#include "common/vector.h"
 #if ( SQUISH_USE_SSE > 1 )
 #include <emmintrin.h>
 #endif

@@ -37,7 +37,7 @@
 #include "gui/accelerators.h"
 #include "gui/gtk.h"
 #include "gui/presets.h"
-#include <xmmintrin.h>
+#include "common/vector.h"
 
 #define CLIP(x) 		((x<0.0f)?0.0f:(x>1.0f)?1.0f:x)
 

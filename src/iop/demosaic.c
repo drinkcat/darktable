@@ -30,7 +30,7 @@
 #include <string.h>
 
 // we assume people have -msee support.
-#include <xmmintrin.h>
+#include "common/vector.h"
 
 #define BLOCKSIZE  2048		/* maximum blocksize. must be a power of 2 and will be automatically reduced if needed */
 

@@ -19,7 +19,7 @@
 
 #include <math.h>
 #include <assert.h>
-#include <xmmintrin.h>
+#include "common/vector.h"
 #include "common/opencl.h"
 #include "common/gaussian.h"
 

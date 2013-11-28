@@ -41,7 +41,7 @@
 #include <glib.h>
 #include <glib/gstdio.h>
 #include <errno.h>
-#include <xmmintrin.h>
+#include "common/vector.h"
 
 #define DT_MIPMAP_CACHE_FILE_MAGIC 0xD71337
 #define DT_MIPMAP_CACHE_FILE_VERSION 23

@@ -31,7 +31,7 @@
 #include <gtk/gtk.h>
 #include <stdlib.h>
 #include <assert.h>
-#include <xmmintrin.h>
+#include "common/vector.h"
 
 DT_MODULE(1)
 

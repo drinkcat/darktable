@@ -18,7 +18,7 @@
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
-#include <xmmintrin.h>
+#include "common/vector.h"
 #include <stdlib.h>
 #include <math.h>
 #include <assert.h>
@@ -36,7 +36,7 @@
 #include "dtgtk/gradientslider.h"
 #include <gtk/gtk.h>
 #include <inttypes.h>
-#include <xmmintrin.h>
+#include "common/vector.h"
 
 #define CLIP(x) ((x<0)?0.0:(x>1.0)?1.0:x)
 #define TEA_ROUNDS 8
