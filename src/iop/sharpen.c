@@ -18,7 +18,6 @@
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
-#include <xmmintrin.h>
 #include <stdlib.h>
 #include <math.h>
 #include <assert.h>
@@ -28,6 +27,7 @@
 #include "develop/tiling.h"
 #include "control/control.h"
 #include "common/opencl.h"
+#include "common/vector.h"
 #include "bauhaus/bauhaus.h"
 #include "gui/accelerators.h"
 #include "gui/gtk.h"
@@ -308,13 +308,13 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
     {
       const float *inp = in - ch*rad;
       __attribute__((aligned(16))) float sum[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-      __m128 msum = _mm_setzero_ps();
+      v4sf msum = v4sf_setall(0.f);
 
       for(int k=0; k < wd4*4; k+=4,inp+=4*ch)
       {
-        msum = _mm_add_ps(msum,_mm_mul_ps(_mm_load_ps(mat+k),_mm_set_ps(inp[3*ch],inp[2*ch],inp[ch],inp[0])));
+        msum += *(v4sf*)(mat+k)*v4sf_set(inp[3*ch],inp[2*ch],inp[ch],inp[0]);
       }
-      _mm_store_ps(sum,msum);
+      *(v4sf*)sum = msum;
       *out = sum[0]+sum[1]+sum[2]+sum[3];
       out++;
       in += ch;
@@ -333,7 +333,7 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
       in += ch;
     }
   }
-  _mm_sfence();
+  vector_sfence();
 
 // gauss blur the image vertically
 #ifdef _OPENMP
@@ -351,14 +351,14 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
     for(int i = 0; i<roi_out->width; i++)
     {
       const float *inp = in - step*rad;
-      __m128 msum = _mm_setzero_ps();
+      v4sf msum = v4sf_setall(0.f);
 
       for(int k=0; k < wd4*4; k+=4,inp+=step*4)
       {
-        msum = _mm_add_ps(msum,_mm_mul_ps(_mm_load_ps(mat+k),_mm_set_ps(inp[3*step],inp[2*step],inp[step],inp[0])));
+        msum += *(v4sf*)(mat+k)*v4sf_set(inp[3*step],inp[2*step],inp[step],inp[0]);
       }
-      _mm_store_ps(sum,msum);
-      *out = sum[0]+sum[1]+sum[2]+sum[3];
+      *(v4sf*)sum = msum;
+      *out = msum[0]+msum[1]+msum[2]+msum[3];
       out += ch;
       in ++;
     }
@@ -385,7 +385,7 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
     }
   }
 
-  _mm_sfence();
+  vector_sfence();
 
   // fill unsharpened border
   for(int j=0; j<rad; j++)
