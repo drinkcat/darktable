@@ -25,9 +25,10 @@
 #include "gui/accelerators.h"
 #include "gui/gtk.h"
 #include "common/opencl.h"
+#include "common/vector.h"
 #include <gtk/gtk.h>
 #include <stdlib.h>
-#include <xmmintrin.h>
+
 
 
 #define BLOCKSIZE 2048		/* maximum blocksize. must be a power of 2 and will be automatically reduced if needed */
@@ -454,8 +455,8 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
             slide += s[P] - s[-P-1];
           if(i+ki >= 0 && i+ki < roi_out->width)
           {
-            const __m128 iv = { ins[0], ins[1], ins[2], 1.0f };
-            _mm_store_ps(out, _mm_load_ps(out) + iv * _mm_set1_ps(gh(slide, sharpness)));
+            const v4sf iv = { ins[0], ins[1], ins[2], 1.0f };
+            *(v4sf*)out += iv * gh(slide, sharpness);
           }
           s   ++;
           ins += 4;
@@ -466,69 +467,69 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
           // sliding window in j direction:
           int i = MAX(0, -ki);
           float *s = S + i;
-          const float *inp  = ((float *)ivoid) + 4*i + 4* roi_in->width *(j+P+1);
-          const float *inps = ((float *)ivoid) + 4*i + 4*(roi_in->width *(j+P+1+kj) + ki);
-          const float *inm  = ((float *)ivoid) + 4*i + 4* roi_in->width *(j-P);
-          const float *inms = ((float *)ivoid) + 4*i + 4*(roi_in->width *(j-P+kj) + ki);
+          const v4sf *inp  = ((v4sf *)ivoid) + i +  roi_in->width *(j+P+1);
+          const v4sf *inps = ((v4sf *)ivoid) + i + (roi_in->width *(j+P+1+kj) + ki);
+          const v4sf *inm  = ((v4sf *)ivoid) + i +  roi_in->width *(j-P);
+          const v4sf *inms = ((v4sf *)ivoid) + i + (roi_in->width *(j-P+kj) + ki);
           const int last = roi_out->width + MIN(0, -ki);
-          for(; ((intptr_t)s & 0xf) != 0 && i<last; i++, inp+=4, inps+=4, inm+=4, inms+=4, s++)
+          for(; ((intptr_t)s & 0xf) != 0 && i<last; i++, inp++, inps++, inm++, inms++, s++)
           {
             float stmp = s[0];
             for(int k=0; k<3; k++)
-              stmp += ((inp[k] - inps[k])*(inp[k] - inps[k])
-                       -  (inm[k] - inms[k])*(inm[k] - inms[k])) * norm2[k];
+              stmp += (  ((*inp)[k] - (*inps)[k])*((*inp)[k] - (*inps)[k])
+                       - ((*inm)[k] - (*inms)[k])*((*inm)[k] - (*inms)[k]) ) * norm2[k];
             s[0] = stmp;
           }
           /* Process most of the line 4 pixels at a time */
-          for(; i<last-4; i+=4, inp+=16, inps+=16, inm+=16, inms+=16, s+=4)
+          for(; i<last-4; i+=4, inp+=4, inps+=4, inm+=4, inms+=4, s+=4)
           {
-            __m128 sv = _mm_load_ps(s);
-            const __m128 inp1 = _mm_load_ps(inp)    - _mm_load_ps(inps);
-            const __m128 inp2 = _mm_load_ps(inp+4)  - _mm_load_ps(inps+4);
-            const __m128 inp3 = _mm_load_ps(inp+8)  - _mm_load_ps(inps+8);
-            const __m128 inp4 = _mm_load_ps(inp+12) - _mm_load_ps(inps+12);
+            v4sf sv = *(v4sf*)s;
+            const v4sf inp1 = *inp + *inps;
+            const v4sf inp2 = *(inp+1) + *(inps+1);
+            const v4sf inp3 = *(inp+2) + *(inps+2);
+            const v4sf inp4 = *(inp+3) + *(inps+3);
 
-            const __m128 inp12lo = _mm_unpacklo_ps(inp1,inp2);
-            const __m128 inp34lo = _mm_unpacklo_ps(inp3,inp4);
-            const __m128 inp12hi = _mm_unpackhi_ps(inp1,inp2);
-            const __m128 inp34hi = _mm_unpackhi_ps(inp3,inp4);
+            const v4sf inp12lo = __builtin_shuffle(inp1,inp2,(v4si){0,4,1,5});
+            const v4sf inp34lo = __builtin_shuffle(inp3,inp4,(v4si){0,4,1,5});
+            const v4sf inp12hi = __builtin_shuffle(inp1,inp2,(v4si){2,6,3,7});
+            const v4sf inp34hi = __builtin_shuffle(inp3,inp4,(v4si){2,6,3,7});
 
-            const __m128 inpv0 = _mm_movelh_ps(inp12lo,inp34lo);
-            sv += inpv0*inpv0 * _mm_set1_ps(norm2[0]);
+            const v4sf inpv0 = __builtin_shuffle(inp12lo,inp34lo,(v4si){0,1,4,5});
+            sv += inpv0*inpv0*norm2[0];
 
-            const __m128 inpv1 = _mm_movehl_ps(inp34lo,inp12lo);
-            sv += inpv1*inpv1 * _mm_set1_ps(norm2[1]);
+            const v4sf inpv1 = __builtin_shuffle(inp34lo,inp12lo,(v4si){6,7,2,3});
+            sv += inpv1*inpv1*norm2[1];
 
-            const __m128 inpv2 = _mm_movelh_ps(inp12hi,inp34hi);
-            sv += inpv2*inpv2 * _mm_set1_ps(norm2[2]);
+            const v4sf inpv2 = __builtin_shuffle(inp12hi,inp34hi,(v4si){0,1,4,5});
+            sv += inpv2*inpv2*norm2[2];
 
-            const __m128 inm1 = _mm_load_ps(inm)    - _mm_load_ps(inms);
-            const __m128 inm2 = _mm_load_ps(inm+4)  - _mm_load_ps(inms+4);
-            const __m128 inm3 = _mm_load_ps(inm+8)  - _mm_load_ps(inms+8);
-            const __m128 inm4 = _mm_load_ps(inm+12) - _mm_load_ps(inms+12);
+            const v4sf inm1 = *inm - *inms;
+            const v4sf inm2 = *(inm+1) - *(inms+1);
+            const v4sf inm3 = *(inm+2) - *(inms+2);
+            const v4sf inm4 = *(inm+3) - *(inms+3);
 
-            const __m128 inm12lo = _mm_unpacklo_ps(inm1,inm2);
-            const __m128 inm34lo = _mm_unpacklo_ps(inm3,inm4);
-            const __m128 inm12hi = _mm_unpackhi_ps(inm1,inm2);
-            const __m128 inm34hi = _mm_unpackhi_ps(inm3,inm4);
+            const v4sf inm12lo = __builtin_shuffle(inm1,inm2,(v4si){0,4,1,5});
+            const v4sf inm34lo = __builtin_shuffle(inm3,inm4,(v4si){0,4,1,5});
+            const v4sf inm12hi = __builtin_shuffle(inm1,inm2,(v4si){2,6,3,7});
+            const v4sf inm34hi = __builtin_shuffle(inm3,inm4,(v4si){2,6,3,7});
 
-            const __m128 inmv0 = _mm_movelh_ps(inm12lo,inm34lo);
-            sv -= inmv0*inmv0 * _mm_set1_ps(norm2[0]);
+            const v4sf inmv0 = __builtin_shuffle(inm12lo,inm34lo,(v4si){0,1,4,5});
+            sv -= inmv0*inmv0*norm2[0];
 
-            const __m128 inmv1 = _mm_movehl_ps(inm34lo,inm12lo);
-            sv -= inmv1*inmv1 * _mm_set1_ps(norm2[1]);
+            const v4sf inmv1 = __builtin_shuffle(inm34lo,inm12lo,(v4si){6,7,2,3});
+            sv -= inmv1*inmv1*norm2[1];
 
-            const __m128 inmv2 = _mm_movelh_ps(inm12hi,inm34hi);
-            sv -= inmv2*inmv2 * _mm_set1_ps(norm2[2]);
+            const v4sf inmv2 = __builtin_shuffle(inm12hi,inm34hi,(v4si){0,1,4,5});
+            sv -= inmv2*inmv2*norm2[2];
 
-            _mm_store_ps(s, sv);
+            *(v4sf*)s = sv;
           }
-          for(; i<last; i++, inp+=4, inps+=4, inm+=4, inms+=4, s++)
+          for(; i<last; i++, inp++, inps++, inm++, inms++, s++)
           {
             float stmp = s[0];
             for(int k=0; k<3; k++)
-              stmp += ((inp[k] - inps[k])*(inp[k] - inps[k])
-                       -  (inm[k] - inms[k])*(inm[k] - inms[k])) * norm2[k];
+              stmp += (  ((*inp)[k] - (*inps)[k])*((*inp)[k] - (*inps)[k])
+                       - ((*inm)[k] - (*inms)[k])*((*inm)[k] - (*inms)[k]) ) * norm2[k];
             s[0] = stmp;
           }
         }
@@ -538,23 +539,21 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
   }
   // normalize and apply chroma/luma blending
   // bias a bit towards higher values for low input values:
-  // const __m128 weight = _mm_set_ps(1.0f, powf(d->chroma, 0.6), powf(d->chroma, 0.6), powf(d->luma, 0.6));
-  const __m128 weight = _mm_set_ps(1.0f, d->chroma, d->chroma, d->luma);
-  const __m128 invert = _mm_sub_ps(_mm_set1_ps(1.0f), weight);
+  // const v4sf weight = _mm_set_ps(1.0f, powf(d->chroma, 0.6), powf(d->chroma, 0.6), powf(d->luma, 0.6));
+  const v4sf weight = v4sf_set(1.0f, d->chroma, d->chroma, d->luma);
+  const v4sf invert = v4sf_setall(1.0f)-weight;
 #ifdef _OPENMP
   #pragma omp parallel for default(none) schedule(static) shared(ovoid,ivoid,roi_out,d)
 #endif
   for(int j=0; j<roi_out->height; j++)
   {
-    float *out = ((float *)ovoid) + 4*roi_out->width*j;
-    float *in  = ((float *)ivoid) + 4*roi_out->width*j;
+    v4sf *out = ((v4sf *)ovoid) + roi_out->width*j;
+    v4sf *in  = ((v4sf *)ivoid) + roi_out->width*j;
     for(int i=0; i<roi_out->width; i++)
     {
-      _mm_store_ps(out, _mm_add_ps(
-                     _mm_mul_ps(_mm_load_ps(in),  invert),
-                     _mm_mul_ps(_mm_load_ps(out), _mm_div_ps(weight, _mm_set1_ps(out[3])))));
-      out += 4;
-      in  += 4;
+      *out = (*in * invert) + (*out * weight/(*out)[3]);
+      out ++;
+      in  ++;
     }
   }
   // free shared tmp memory:
