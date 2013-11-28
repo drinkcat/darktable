@@ -18,7 +18,6 @@
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
-#include <xmmintrin.h>
 #include <stdlib.h>
 #include <math.h>
 #include <assert.h>
@@ -29,6 +28,7 @@
 #include "control/control.h"
 #include "common/colorspaces.h"
 #include "common/opencl.h"
+#include "common/vector.h"
 #include "gui/accelerators.h"
 #include "gui/gtk.h"
 #include "libraw/libraw.h"
@@ -225,22 +225,22 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
       for ( ; i < ((4-(j*roi_out->width & 3)) & 3) ; i++,out++,in++)
         *out = *in * coeffsi[FC(j+roi_out->y, i+roi_out->x, filters)];
 
-      const __m128 coeffs = _mm_set_ps(coeffsi[FC(j+roi_out->y, roi_out->x+i+3, filters)],
+      const v4sf coeffs = v4sf_set(coeffsi[FC(j+roi_out->y, roi_out->x+i+3, filters)],
                                        coeffsi[FC(j+roi_out->y, roi_out->x+i+2, filters)],
                                        coeffsi[FC(j+roi_out->y, roi_out->x+i+1, filters)],
-                                       coeffsi[FC(j+roi_out->y, roi_out->x+i  , filters)]);
+                                 coeffsi[FC(j+roi_out->y, roi_out->x+i  , filters)]);
 
       // process aligned pixels with SSE
       for( ; i < roi_out->width - 3 ; i+=4,out+=4,in+=4)
       {
-        _mm_stream_ps(out,_mm_mul_ps(coeffs,_mm_set_ps(in[3],in[2],in[1],in[0])));
+        *(v4sf*)out = coeffs*v4sf_set(in[3],in[2],in[1],in[0]);
       }
 
       // process the rest
       for( ; i<roi_out->width; i++,out++,in++)
         *out = *in * coeffsi[FC(j+roi_out->y, i+roi_out->x, filters)];
     }
-    _mm_sfence();
+    vector_sfence();
   }
   else if(!dt_dev_pixelpipe_uses_downsampled_input(piece->pipe) && filters && piece->pipe->image.bpp == 4)
   {
