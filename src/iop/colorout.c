@@ -28,8 +28,9 @@
 #include "gui/gtk.h"
 #include "common/colorspaces.h"
 #include "common/opencl.h"
+#include "common/vector.h"
 
-#include <xmmintrin.h>
+
 #include <stdlib.h>
 #include <math.h>
 #include <assert.h>
@@ -346,34 +347,34 @@ error:
 }
 #endif
 
-static inline __m128
-lab_f_inv_m(const __m128 x)
+static inline v4sf
+lab_f_inv_m(const v4sf x)
 {
-  const __m128 epsilon = _mm_set1_ps(0.20689655172413796f); // cbrtf(216.0f/24389.0f);
-  const __m128 kappa_rcp_x16   = _mm_set1_ps(16.0f*27.0f/24389.0f);
-  const __m128 kappa_rcp_x116   = _mm_set1_ps(116.0f*27.0f/24389.0f);
+  const v4sf epsilon = v4sf_setall(0.20689655172413796f); // cbrtf(216.0f/24389.0f);
+  const v4sf kappa_rcp_x16   = v4sf_setall(16.0f*27.0f/24389.0f);
+  const v4sf kappa_rcp_x116   = v4sf_setall(116.0f*27.0f/24389.0f);
 
   // x > epsilon
-  const __m128 res_big   = _mm_mul_ps(_mm_mul_ps(x,x),x);
+  const v4sf res_big   = x*x*x;
   // x <= epsilon
-  const __m128 res_small = _mm_sub_ps(_mm_mul_ps(kappa_rcp_x116,x),kappa_rcp_x16);
+  const v4sf res_small = (kappa_rcp_x116*x)-kappa_rcp_x16;
 
   // blend results according to whether each component is > epsilon or not
-  const __m128 mask = _mm_cmpgt_ps(x,epsilon);
-  return _mm_or_ps(_mm_and_ps(mask,res_big),_mm_andnot_ps(mask,res_small));
+  const v4si mask = (x > epsilon);
+  return (v4sf)((mask & (v4si)res_big) | (~mask & (v4si)res_small));
 }
 
-static inline __m128
-dt_Lab_to_XYZ_SSE(const __m128 Lab)
+static inline v4sf
+dt_Lab_to_XYZ_SSE(const v4sf Lab)
 {
-  const __m128 d50    = _mm_set_ps(0.0f, 0.8249f, 1.0f, 0.9642f);
-  const __m128 coef   = _mm_set_ps(0.0f,-1.0f/200.0f,1.0f/116.0f,1.0f/500.0f);
-  const __m128 offset = _mm_set1_ps(0.137931034f);
+  const v4sf d50    = v4sf_set(0.0f, 0.8249f, 1.0f, 0.9642f);
+  const v4sf coef   = v4sf_set(0.0f,-1.0f/200.0f,1.0f/116.0f,1.0f/500.0f);
+  const v4sf offset = v4sf_setall(0.137931034f);
 
   // last component ins shuffle taken from 1st component of Lab to make sure it is not nan, so it will become 0.0f in f
-  const __m128 f = _mm_mul_ps(_mm_shuffle_ps(Lab,Lab,_MM_SHUFFLE(0,2,0,1)),coef);
+  const v4sf f = __builtin_shuffle(Lab,v4si_set(0,2,0,1))*coef;
 
-  return _mm_mul_ps(d50,lab_f_inv_m(_mm_add_ps(_mm_add_ps(f,_mm_shuffle_ps(f,f,_MM_SHUFFLE(1,1,3,1))),offset)));
+  return d50*lab_f_inv_m(f+__builtin_shuffle(f,v4si_set(1,1,3,1))+offset);
 }
 
 void
@@ -395,19 +396,21 @@ process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void *ivoi
 
       float *in  = (float*)ivoid + ch*roi_in->width *j;
       float *out = (float*)ovoid + ch*roi_out->width*j;
-      const __m128 m0 = _mm_set_ps(0.0f,d->cmatrix[6],d->cmatrix[3],d->cmatrix[0]);
-      const __m128 m1 = _mm_set_ps(0.0f,d->cmatrix[7],d->cmatrix[4],d->cmatrix[1]);
-      const __m128 m2 = _mm_set_ps(0.0f,d->cmatrix[8],d->cmatrix[5],d->cmatrix[2]);
+      const v4sf m0 = v4sf_set(0.0f,d->cmatrix[6],d->cmatrix[3],d->cmatrix[0]);
+      const v4sf m1 = v4sf_set(0.0f,d->cmatrix[7],d->cmatrix[4],d->cmatrix[1]);
+      const v4sf m2 = v4sf_set(0.0f,d->cmatrix[8],d->cmatrix[5],d->cmatrix[2]);
 
       for(int i=0; i<roi_out->width; i++, in+=ch, out+=ch )
       {
-        const __m128 xyz = dt_Lab_to_XYZ_SSE(_mm_load_ps(in));
-        const __m128 t = _mm_add_ps(_mm_mul_ps(m0,_mm_shuffle_ps(xyz,xyz,_MM_SHUFFLE(0,0,0,0))),_mm_add_ps(_mm_mul_ps(m1,_mm_shuffle_ps(xyz,xyz,_MM_SHUFFLE(1,1,1,1))),_mm_mul_ps(m2,_mm_shuffle_ps(xyz,xyz,_MM_SHUFFLE(2,2,2,2)))));
+        const v4sf xyz = dt_Lab_to_XYZ_SSE(*(v4sf*)in);
+        const v4sf t = m0*__builtin_shuffle(xyz,v4si_set(0,0,0,0))+
+                       m1*__builtin_shuffle(xyz,v4si_set(1,1,1,1))+
+                       m2*__builtin_shuffle(xyz,v4si_set(2,2,2,2));
 
-        _mm_stream_ps(out,t);
+        *(v4sf*)out = t;
       }
     }
-    _mm_sfence();
+    vector_sfence();
     // apply profile
 #ifdef _OPENMP
     #pragma omp parallel for schedule(static) default(none) shared(roi_in,roi_out, ivoid, ovoid)
