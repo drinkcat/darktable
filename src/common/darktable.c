@@ -71,7 +71,10 @@
   #include <sys/wait.h>
 #endif
 #include <locale.h>
-#include <xmmintrin.h>
+#ifdef __SSE2__
+  #include <xmmintrin.h>
+#endif
+
 #ifdef HAVE_GRAPHICSMAGICK
 #include <magick/api.h>
 #endif
@@ -354,15 +357,11 @@ int dt_load_from_string(const gchar* input, gboolean open_image_in_dr)
 int dt_init(int argc, char *argv[], const int init_gui)
 {
   // make everything go a lot faster.
+#ifdef __SSE2__
   _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
+#endif
 #if !defined __APPLE__ && !defined __WIN32__
   _dt_sigsegv_old_handler = signal(SIGSEGV,&_dt_sigsegv_handler);
-#endif
-
-#ifndef __SSE2__
-  fprintf(stderr, "[dt_init] unfortunately we depend on SSE2 instructions at this time.\n");
-  fprintf(stderr, "[dt_init] please contribute a backport patch (or buy a newer processor).\n");
-  return 1;
 #endif
 
 #ifdef M_MMAP_THRESHOLD
