@@ -27,6 +27,7 @@
 #endif
 #include "common/darktable.h"
 #include "common/opencl.h"
+#include "common/vector.h"
 #include "develop/develop.h"
 #include "develop/imageop.h"
 #include "control/control.h"
@@ -36,7 +37,7 @@
 #include "dtgtk/gradientslider.h"
 #include "gui/gtk.h"
 #include "gui/presets.h"
-#include <xmmintrin.h>
+
 
 
 #define CLIP(x) (((x)>=0)?((x)<=1.0?(x):1.0):0.0)
@@ -259,10 +260,10 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
 
       const float zs = ((rz > 0) ? (zonemap_offset[rz]/inp[0]) : 0) + zonemap_scale[rz];
 
-      _mm_stream_ps(outp,_mm_mul_ps(_mm_load_ps(inp),_mm_set1_ps(zs)));
+      *(v4sf*)outp = *(v4sf*)inp*zs;
     }
 
-  _mm_sfence();
+  vector_sfence();
 
   if(piece->pipe->mask_display)
     dt_iop_alpha_copy(ivoid, ovoid, roi_out->width, roi_out->height);
