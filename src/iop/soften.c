@@ -28,6 +28,7 @@
 #include "bauhaus/bauhaus.h"
 #include "common/colorspaces.h"
 #include "common/opencl.h"
+#include "common/vector.h"
 #include "develop/develop.h"
 #include "develop/imageop.h"
 #include "develop/tiling.h"
@@ -37,14 +38,13 @@
 #include "gui/gtk.h"
 #include <gtk/gtk.h>
 #include <inttypes.h>
-#include <xmmintrin.h>
 
 #define MAX_RADIUS  32
 #define BOX_ITERATIONS 8
 #define BLOCKSIZE 2048		/* maximum blocksize. must be a power of 2 and will be automatically reduced if needed */
 
 #define CLIP(x) ((x<0)?0.0:(x>1.0)?1.0:x)
-#define MM_CLIP_PS(X) (_mm_min_ps(_mm_max_ps((X), _mm_setzero_ps()), _mm_set1_ps(1.0)))
+#define MM_CLIP_PS(X) (v4sf_min(v4sf_max((X), v4sf_setall(0.f)), v4sf_setall(1.f)))
 
 DT_MODULE(1)
 
@@ -156,9 +156,9 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
     /* horizontal blur out into out */
     for(int y=0; y<roi_out->height; y++)
     {
-      __m128 scanline[size];
+      v4sf scanline[size];
       int index = y * roi_out->width;
-      __m128 L = _mm_setzero_ps();
+      v4sf L = v4sf_setall(0.f);
       int hits = 0;
       for(int x=-radius; x<roi_out->width; x++)
       {
@@ -166,20 +166,20 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
         int np = x+radius;
         if(op>=0)
         {
-          L = _mm_sub_ps(L, _mm_load_ps(&out[(index+op)*ch]));
+          L = L - *(v4sf*)(&out[(index+op)*ch]);
           hits--;
         }
         if(np < roi_out->width)
         {
-          L =  _mm_add_ps(L, _mm_load_ps(&out[(index+np)*ch]));
+          L =  L + *(v4sf*)(&out[(index+np)*ch]);
           hits++;
         }
         if(x>=0)
-          scanline[x] = _mm_div_ps(L, _mm_set_ps1(hits));
+          scanline[x] = L/(float)hits;
       }
 
       for (int x=0; x<roi_out->width; x++)
-        _mm_store_ps(&out[(index+x)*ch], scanline[x]);
+        *((v4sf*)&out[(index+x)*ch]) = scanline[x];
     }
 
     /* vertical pass on blurlightness */
@@ -190,8 +190,8 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
 #endif
     for(int x=0; x < roi_out->width; x++)
     {
-      __m128 scanline[size];
-      __m128 L = _mm_setzero_ps();
+      v4sf scanline[size];
+      v4sf L = v4sf_setall(0.f);
       int hits=0;
       int index = -radius*roi_out->width+x;
       for(int y=-radius; y<roi_out->height; y++)
@@ -201,36 +201,34 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
 
         if(op>=0)
         {
-          L = _mm_sub_ps(L, _mm_load_ps(&out[(index+opoffs)*ch]));
+          L = L-*(v4sf*)(&out[(index+opoffs)*ch]);
           hits--;
         }
         if(np < roi_out->height)
         {
-          L = _mm_add_ps(L, _mm_load_ps(&out[(index+npoffs)*ch]));
+          L = L+*(v4sf*)(&out[(index+npoffs)*ch]);
           hits++;
         }
         if(y>=0)
-          scanline[y] = _mm_div_ps(L, _mm_set_ps1(hits));
+          scanline[y] = L/(float)hits;
         index += roi_out->width;
       }
 
       for (int y=0; y<roi_out->height; y++)
-        _mm_store_ps(&out[(y*roi_out->width+x)*ch], scanline[y]);
+        *(v4sf*)(&out[(y*roi_out->width+x)*ch]) = scanline[y];
     }
   }
 
 
-  const __m128 amount = _mm_set1_ps(data->amount/100.0);
-  const __m128 amount_1 = _mm_set1_ps(1-(data->amount)/100.0);
+  const v4sf amount = v4sf_setall(data->amount/100.0);
+  const v4sf amount_1 = v4sf_setall(1-(data->amount)/100.0);
 #ifdef _OPENMP
   #pragma omp parallel for default(none) shared(roi_out, in, out, data) schedule(static)
 #endif
   for(int k=0; k<roi_out->width*roi_out->height; k++)
   {
     int index = ch*k;
-    _mm_store_ps(&out[index],
-                 _mm_add_ps(_mm_mul_ps(_mm_load_ps(&in[index]), amount_1),
-                            _mm_mul_ps(MM_CLIP_PS(_mm_load_ps(&out[index])), amount)));
+    *(v4sf*)(&out[index]) = *(v4sf*)(&in[index])*amount_1 + MM_CLIP_PS(*(v4sf*)&out[index])*amount;
   }
 }
 
