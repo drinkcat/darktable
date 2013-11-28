@@ -18,6 +18,7 @@
 
 #include "common/darktable.h"
 #include "common/interpolation.h"
+#include "common/vector.h"
 #include "control/conf.h"
 
 #include <math.h>
@@ -116,12 +117,15 @@ ceil_fast(
 /** Compute absolute value
  * @param t Vector of 4 floats
  * @return Vector of their absolute values
- */static inline __m128
+ */
+#ifdef HAVE_SSE
+static inline __m128
 _mm_abs_ps(__m128 t)
 {
   static const uint32_t signmask[4] __attribute__((aligned(SSE_ALIGNMENT))) = { 0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff};
   return _mm_and_ps(*(__m128*)signmask, t);
 }
+#endif
 
 /** Clip into specified range
  * @param idx index to filter
@@ -257,6 +261,7 @@ sinf_fast(float t)
  * @param t Radian parameter
  * @return guess what
  */
+#ifdef HASSSE
 static inline __m128
 sinf_fast_sse(__m128 t)
 {
@@ -278,6 +283,7 @@ sinf_fast_sse(__m128 t)
 
   return _mm_add_ps(n4, m4);
 }
+#endif
 /* --------------------------------------------------------------------------
  * Interpolation kernels
  * ------------------------------------------------------------------------*/
@@ -302,12 +308,14 @@ bilinear(float width, float t)
   return r;
 }
 
+#ifdef HAS_SSE
 static inline __m128
 bilinear_sse(__m128 width, __m128 t)
 {
   static const __m128 one = { 1.f, 1.f, 1.f, 1.f};
   return _mm_sub_ps(one, _mm_abs_ps(t));
 }
+#endif
 
 /* --------------------------------------------------------------------------
  * Bicubic interpolation
@@ -335,6 +343,7 @@ bicubic(float width, float t)
   return r;
 }
 
+#ifdef HAS_SSE
 static inline __m128
 bicubic_sse(__m128 width, __m128 t)
 {
@@ -380,6 +389,7 @@ bicubic_sse(__m128 width, __m128 t)
 
   return _mm_or_ps(r01, r12);
 }
+#endif
 
 /* --------------------------------------------------------------------------
  * Lanczos interpolation
@@ -445,6 +455,7 @@ lanczos(float width, float t)
   return (DT_LANCZOS_EPSILON + width*sign.f*sinf_fast(M_PI*r)*sinf_fast(M_PI*t/width))/(DT_LANCZOS_EPSILON + M_PI*M_PI*t*t);
 }
 
+#ifdef HAS_SSE
 static inline __m128
 lanczos_sse(__m128 width, __m128 t)
 {
@@ -475,6 +486,7 @@ lanczos_sse(__m128 width, __m128 t)
 
   return _mm_div_ps(num, den);
 }
+#endif
 
 #undef DT_LANCZOS_EPSILON
 
@@ -493,29 +505,37 @@ static const struct dt_interpolation dt_interpolator[] =
     .id = DT_INTERPOLATION_BILINEAR,
     .name = "bilinear",
     .width = 1,
-    .func = &bilinear,
-    .funcsse = &bilinear_sse
+#ifdef HAVE_SSE
+    .funcsse = &bilinear_sse,
+#endif
+    .func = &bilinear
   },
   {
     .id = DT_INTERPOLATION_BICUBIC,
     .name = "bicubic",
     .width = 2,
-    .func = &bicubic,
-    .funcsse = &bicubic_sse
+#ifdef HAVE_SSE
+    .funcsse = &bicubic_sse,
+#endif
+    .func = &bicubic
   },
   {
     .id = DT_INTERPOLATION_LANCZOS2,
     .name = "lanczos2",
     .width = 2,
-    .func = &lanczos,
-    .funcsse = &lanczos_sse
+#ifdef HAVE_SSE
+    .funcsse = &lanczos_sse,
+#endif
+    .func = &lanczos
   },
   {
     .id = DT_INTERPOLATION_LANCZOS3,
     .name = "lanczos3",
     .width = 3,
-    .func = &lanczos,
-    .funcsse = &lanczos_sse
+#ifdef HAVE_SSE
+    .funcsse = &lanczos_sse,
+#endif
+    .func = &lanczos
   },
 };
 
@@ -575,6 +595,7 @@ compute_upsampling_kernel(
  *
  * @return kernel norm
  */
+#ifdef HAS_SSE
 static inline void
 compute_upsampling_kernel_sse(
   const struct dt_interpolation* itor,
@@ -632,6 +653,7 @@ compute_upsampling_kernel_sse(
     *norm = n;
   }
 }
+#endif
 
 /** Computes a downsampling filtering kernel
  *
@@ -695,6 +717,7 @@ compute_downsampling_kernel(
  * @param first [out] index of the first sample for which the kernel is to be applied
  * @param outoinratio [in] "out samples" over "in samples" ratio
  * @param xout [in] Output coordinate */
+#ifdef HAS_SSE
 static inline void
 compute_downsampling_kernel_sse(
   const struct dt_interpolation* itor,
@@ -761,7 +784,7 @@ compute_downsampling_kernel_sse(
     *norm = n;
   }
 }
-
+#endif
 /* --------------------------------------------------------------------------
  * Sample interpolation function (see usage in iop/lens.c and iop/clipping.c)
  * ------------------------------------------------------------------------*/
@@ -785,8 +808,8 @@ dt_interpolation_compute_sample(
   // Compute both horizontal and vertical kernels
   float normh;
   float normv;
-  compute_upsampling_kernel_sse(itor, kernelh, &normh, NULL, x);
-  compute_upsampling_kernel_sse(itor, kernelv, &normv, NULL, y);
+  compute_upsampling_kernel(itor, kernelh, &normh, NULL, x);
+  compute_upsampling_kernel(itor, kernelv, &normv, NULL, y);
 
   int ix = (int)x;
   int iy = (int)y;
@@ -891,24 +914,24 @@ dt_interpolation_compute_pixel4c(
   // Quite a bit of space for kernels
   float kernelh[MAX_KERNEL_REQ] __attribute__((aligned(SSE_ALIGNMENT)));
   float kernelv[MAX_KERNEL_REQ] __attribute__((aligned(SSE_ALIGNMENT)));
-  __m128 vkernelh[2*MAX_HALF_FILTER_WIDTH];
-  __m128 vkernelv[2*MAX_HALF_FILTER_WIDTH];
+  v4sf vkernelh[2*MAX_HALF_FILTER_WIDTH];
+  v4sf vkernelv[2*MAX_HALF_FILTER_WIDTH];
 
   // Compute both horizontal and vertical kernels
   float normh;
   float normv;
-  compute_upsampling_kernel_sse(itor, kernelh, &normh, NULL, x);
-  compute_upsampling_kernel_sse(itor, kernelv, &normv, NULL, y);
+  compute_upsampling_kernel(itor, kernelh, &normh, NULL, x);
+  compute_upsampling_kernel(itor, kernelv, &normv, NULL, y);
 
   // We will process four components a time, duplicate the information
   for (int i=0; i<2*itor->width; i++)
   {
-    vkernelh[i] = _mm_set_ps1(kernelh[i]);
-    vkernelv[i] = _mm_set_ps1(kernelv[i]);
+    vkernelh[i] = v4sf_setall(kernelh[i]);
+    vkernelv[i] = v4sf_setall(kernelv[i]);
   }
 
   // Precompute the inverse of the filter norm for later use
-  __m128 oonorm = _mm_set_ps1(1.f/(normh*normv));
+  v4sf oonorm = v4sf_setall(1.f/(normh*normv));
 
   /* Now 2 cases, the pixel + filter width goes outside the image
    * in that case we have to use index clipping to keep all reads
@@ -929,19 +952,19 @@ dt_interpolation_compute_pixel4c(
     in = in - (itor->width-1)*(4 + linestride);
 
     // Apply the kernel
-    __m128 pixel = _mm_setzero_ps();
+    v4sf pixel = v4sf_setall(0.f);
     for (int i=0; i<2*itor->width; i++)
     {
-      __m128 h = _mm_setzero_ps();
+      v4sf h = v4sf_setall(0.f);
       for (int j=0; j<2*itor->width; j++)
       {
-        h = _mm_add_ps(h, _mm_mul_ps(vkernelh[j], *(__m128*)&in[j*4]));
+        h = h + vkernelh[j] * *(v4sf*)&in[j*4];
       }
-      pixel = _mm_add_ps(pixel, _mm_mul_ps(vkernelv[i],h));
+      pixel = pixel + vkernelv[i]*h;
       in += linestride;
     }
 
-    *(__m128*)out = _mm_mul_ps(pixel, oonorm);
+    *(v4sf*)out = pixel * oonorm;
 
   }
   else if ( ix >= 0
@@ -967,25 +990,25 @@ dt_interpolation_compute_pixel4c(
     prepare_tap_boundaries(&ytap_first, &ytap_last, bordermode, 2*itor->width, iy, height);
 
     // Apply the kernel
-    __m128 pixel = _mm_setzero_ps();
+    v4sf pixel = v4sf_setall(0.f);
     for (int i=ytap_first; i<ytap_last; i++)
     {
       int clip_y = clip(iy + i, 0, height-1, bordermode);
-      __m128 h = _mm_setzero_ps();
+      v4sf h = v4sf_setall(0.f);
       for (int j=xtap_first; j<xtap_last; j++)
       {
         int clip_x = clip(ix + j, 0, width-1, bordermode);
         const float* ipixel = in + clip_y*linestride + clip_x*4;
-        h = _mm_add_ps(h, _mm_mul_ps(vkernelh[j], *(__m128*)ipixel));
+        h = h + vkernelh[j] * *(v4sf*)ipixel;
       }
-      pixel = _mm_add_ps(pixel, _mm_mul_ps(vkernelv[i],h));
+      pixel = pixel + vkernelv[i]*h;
     }
 
-    *(__m128*)out = _mm_mul_ps(pixel, oonorm);
+    *(v4sf*)out = pixel * oonorm;
   }
   else
   {
-    *(__m128*)out = _mm_set_ps1(0.0f);
+    *(v4sf*)out = v4sf_setall(0.0f);
   }
 }
 
@@ -1176,7 +1199,7 @@ prepare_resampling_plan(
 
       // Compute the filter kernel at that position
       int first;
-      compute_upsampling_kernel_sse(itor, scratchpad, NULL, &first, fx);
+      compute_upsampling_kernel(itor, scratchpad, NULL, &first, fx);
 
       /* Check lower and higher bound pixel index and skip as many pixels as
        * necessary to fall into range */
@@ -1225,7 +1248,7 @@ prepare_resampling_plan(
       // Compute downsampling kernel centered on output position
       int taps;
       int first;
-      compute_downsampling_kernel_sse(itor, &taps, &first, scratchpad, NULL, scale, out_x0 + x);
+      compute_downsampling_kernel(itor, &taps, &first, scratchpad, NULL, scale, out_x0 + x);
 
       /* Check lower and higher bound pixel index and skip as many pixels as
        * necessary to fall into range */
@@ -1371,7 +1394,7 @@ dt_interpolation_resample(
       debug_extra("output %p [% 4d % 4d]\n", out, ox, oy);
 
       // This will hold the resulting pixel
-      __m128 vs = _mm_setzero_ps();
+      v4sf vs = v4sf_setall(0.f);
 
       // Number of horizontal samples contributing to the output
       int hl = hlength[hlidx++]; // H(orizontal) L(ength)
@@ -1381,21 +1404,21 @@ dt_interpolation_resample(
         // This is our input line
         const float* i = (float*)((char*)in + in_stride*vindex[viidx++]);
 
-        __m128 vhs = _mm_setzero_ps();
+        v4sf vhs = v4sf_setall(0.f);
 
         for (int ix=0; ix< hl; ix++)
         {
           // Apply the precomputed filter kernel
           int baseidx = hindex[hiidx++]*4;
           float htap = hkernel[hkidx++];
-          __m128 vhtap = _mm_set_ps1(htap);
-          vhs = _mm_add_ps(vhs, _mm_mul_ps(*(__m128*)&i[baseidx], vhtap));
+          v4sf vhtap = v4sf_setall(htap);
+          vhs = vhs + *(v4sf*)&i[baseidx] * vhtap;
         }
 
         // Accumulate contribution from this line
         float vtap = vkernel[vkidx++];
-        __m128 vvtap = _mm_set_ps1(vtap);
-        vs = _mm_add_ps(vs, _mm_mul_ps(vhs, vvtap));
+        v4sf vvtap = v4sf_setall(vtap);
+        vs = vs + vhs * vvtap;
 
         // Reset horizontal resampling context
         hkidx -= hl;
@@ -1404,7 +1427,7 @@ dt_interpolation_resample(
 
       // Output pixel is ready
       float* o = (float*)((char*)out + oy*out_stride + ox*4*sizeof(float));
-      _mm_stream_ps(o, vs);
+      *((v4sf*)o) = vs;
 
       // Reset vertical resampling context
       viidx -= vl;
@@ -1420,7 +1443,7 @@ dt_interpolation_resample(
     vkidx += vl;
   }
 
-  _mm_sfence();
+  vector_sfence();
 
 #if DEBUG_RESAMPLING_TIMING
   ts_resampling = getts() - ts_resampling;

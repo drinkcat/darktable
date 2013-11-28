@@ -21,7 +21,7 @@
 
 #include "develop/pixelpipe_hb.h"
 
-#include <xmmintrin.h>
+
 
 /** Available interpolations */
 enum dt_interpolation_type
@@ -40,7 +40,9 @@ enum dt_interpolation_type
 typedef float (*dt_interpolation_func)(float width, float t);
 
 /** Interpolation function (SSE) */
+#ifdef HAVE_SSE
 typedef __m128 (*dt_interpolation_sse_func)(__m128 width, __m128 t);
+#endif
 
 /** Interpolation structure */
 struct dt_interpolation
@@ -49,7 +51,9 @@ struct dt_interpolation
   const char* name; /**< internal name  */
   int width; /**< Half width of its kernel support */
   dt_interpolation_func func; /**< Kernel function */
+#ifdef HAVE_SSE
   dt_interpolation_sse_func funcsse; /**< Kernel function (four params a time) */
+#endif
 };
 
 /** Compute a single interpolated sample.
